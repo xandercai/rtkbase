@@ -22,7 +22,7 @@ for file in *.ubx; do
     [[ -e "$file" ]] || continue
 
     # 3. filter out and protect the current writing file
-    if [[ $(find "$file" -mmin + "${buffer_minutes}") ]]; then
+    if [[ $(find "$file" -mmin +"${buffer_minutes}") ]]; then
         echo "Compressing old file: $file"
         gzip -c "$file" > "${file}.gz"
 
