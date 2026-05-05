@@ -15,7 +15,7 @@ man_help() {
  exit 0
 }
 
-BASEDIR=$(dirname "$0")
+BASEDIR="$(dirname "$0")/.."
 ARG_HELP=0
 ARG_PYPATH=0
 ARG_USER=0
@@ -49,6 +49,7 @@ if [ "$VALID_ARGUMENTS" != "0" ]; then
 
 # xcai->
 FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "${BASEDIR}/settings.conf.default" | cut -d"'" -f2)
+echo 'Configue rtkbase_achive.timer.FILE_ROTATE_TIME = ' "$FILE_ROTATE_TIME"
 # if undefined then 1 day for achive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
