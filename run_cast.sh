@@ -80,7 +80,7 @@ mkdir -p ${logdir}
     #echo ${cast} -in ${!1} -out $out_rtcm_svr
     ${cast} -in ${!1} ${out_rtcm_svr} -i "${receiver_info}" -a "${antenna_info}" -t ${level} -fl ${logdir}/str2str_rtcm_svr.log
     ;;
-  
+
   out_rtcm_client)
     #echo ${cast} -in ${!1} -out $out_rtcm_client
     ${cast} -in ${!1} ${out_rtcm_client} -i "${receiver_info}" -a "${antenna_info}" -t ${level} -fl ${logdir}/str2str_rtcm_client.log
@@ -90,7 +90,7 @@ mkdir -p ${logdir}
     #echo ${cast} -in ${!1} -out $out_rtcm_udp_svr
     ${cast} -in ${!1} ${out_rtcm_udp_svr} -i "${receiver_info}" -a "${antenna_info}" -t ${level} -fl ${logdir}/str2str_rtcm_udp_svr.log
     ;;
-  
+
   out_rtcm_serial)
     #echo ${cast} -in ${!1} -out $out_rtcm_serial
     ${cast} -in ${!1} ${out_rtcm_serial} -i "${receiver_info}" -a "${antenna_info}" -t ${level} -fl ${logdir}/str2str_rtcm_serial.log
@@ -106,5 +106,5 @@ mkdir -p ${logdir}
       ${cast} -in ${!1} -out ${out_file} -t ${level} -fl ${logdir}/str2str_file.log
     fi
     ;;
-    
+
   esac

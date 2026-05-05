@@ -47,6 +47,16 @@ if [ "$VALID_ARGUMENTS" != "0" ]; then
 [ "${ARG_USER}" == 0 ] && ARG_USER=$(logname)
 #echo 'user=' "${ARG_USER}"
 
+# xcai->
+FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "${BASEDIR}/settings.conf.default" | cut -d"'" -f2)
+# if undefined then 1 day for achive and upload
+if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
+
+# dynamic modify timer interval
+sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_TIME}h/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+# <-xcai
+
+
 if ! [ $(id -u) = 0 ]; then
    echo "This script needs root/sudo"
    exit 1

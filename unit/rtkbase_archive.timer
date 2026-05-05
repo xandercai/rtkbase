@@ -1,9 +1,12 @@
 [Unit]
-Description=Run rtkbase_archive.service everyday at 04H00
+Description=RTKBase achive and upload timer
 
 [Timer]
-OnCalendar=*-*-* 04:00:00
-Persistent=true
+# the first run after boot 5 mins
+OnBootSec=5min
+# placeholder for copy_unit.sh during installation
+OnUnitActiveSec={{ROTATE_INTERVAL}}
+Unit=rtkbase_archive.service
 
 [Install]
 WantedBy=timers.target

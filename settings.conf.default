@@ -68,7 +68,8 @@ datadir=$BASEDIR/data
 #gnss data filename	    
 file_name='%Y-%m-%d_%h-%M-%S_GNSS-1'
 #file rotate time in hour
-file_rotate_time='24'
+# xcai file_rotate_time='24'
+file_rotate_time='0.1'
 #file overlap time in seconds
 file_overlap_time='0'
 #name for the compressed archive
