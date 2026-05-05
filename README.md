@@ -38,7 +38,7 @@ For older Raspberry Pi releases, see [here](https://github.com/jancelin/pi-gen/r
 
   ```bash
   cd ~
-  wget https://raw.githubusercontent.com/Stefal/rtkbase/master/tools/install.sh -O install.sh
+  wget https://raw.githubusercontent.com/xandercai/rtkbase/master/tools/install.sh -O install.sh
   chmod +x install.sh
   sudo ./install.sh --all release
   ```
