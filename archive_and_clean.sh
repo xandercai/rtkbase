@@ -9,7 +9,7 @@ RCLONE_CONF="/home/xcai/.config/rclone/rclone.conf"  # you may need to change us
 # 2. filter time (rotate time to mins minus 2 mins buffer)
 # for example: if file_rotate_time='1'，filter out files before 1*60 - 2 = 59 mins
 if [ -n "${file_rotate_time}" ]; then
-    buffer_minutes=$(( file_rotate_time * 60 - 2 ))
+    buffer_minutes=$(awk -v t="$file_rotate_time" 'BEGIN {print int(t * 60 - 2)}')
 else
     buffer_minutes=1438 # default filter time 1 day
 fi
@@ -22,7 +22,7 @@ for file in *.ubx; do
     [[ -e "$file" ]] || continue
 
     # 3. filter out and protect the current writing file
-    if [[ $(find "$file" -mmin +${buffer_minutes}) ]]; then
+    if [[ $(find "$file" -mmin + "${buffer_minutes}") ]]; then
         echo "Compressing old file: $file"
         gzip -c "$file" > "${file}.gz"
 
