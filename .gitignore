@@ -4,7 +4,7 @@ rtkrcv.nav
 .vscode/*
 /logs/*
 settings.conf
-/data/*
+# /data/*
 /log/*
 test.sh
 test.conf
