@@ -703,6 +703,7 @@ start_services() {
   systemctl daemon-reload
   systemctl enable --now rtkbase_web.service
   systemctl enable --now str2str_tcp.service
+  systemctl enable --now str2str_file.service
   systemctl restart gpsd.service
   systemctl restart chrony.service
   systemctl enable --now rtkbase_archive.timer
