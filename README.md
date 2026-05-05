@@ -40,7 +40,7 @@ For older Raspberry Pi releases, see [here](https://github.com/jancelin/pi-gen/r
   cd ~
   wget https://raw.githubusercontent.com/xandercai/rtkbase/master/tools/install.sh -O install.sh
   chmod +x install.sh
-  sudo ./install.sh --all repo --rtkbase-repo main
+  sudo ./install.sh --all repo --rtkbase-repo master
   ```
 
 + Go grab a coffee, it's gonna take a while. The script will install the needed software, and if you use a supported receiver (U-Blox ZED-F9P, Septentrio Mosaic-X5, Unicore UM980/UM982), it'll be detected and set to work as a base station. If you don't use a supported recevier, you will have to configure your receiver manually (see step 7 in manual installation), and choose the correct port from the settings page.
