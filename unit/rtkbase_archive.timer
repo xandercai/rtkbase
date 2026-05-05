@@ -1,5 +1,5 @@
 [Unit]
-Description=RTKBase achive and upload timer
+Description=RTKBase archive and upload timer
 
 [Timer]
 # the first run after boot 5 mins

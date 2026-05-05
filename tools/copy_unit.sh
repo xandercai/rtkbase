@@ -49,8 +49,8 @@ if [ "$VALID_ARGUMENTS" != "0" ]; then
 
 # xcai->
 FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "${BASEDIR}/settings.conf.default" | cut -d"'" -f2)
-echo 'Configue rtkbase_achive.timer.FILE_ROTATE_TIME = ' "$FILE_ROTATE_TIME"
-# if undefined then 1 day for achive and upload
+echo 'Configue rtkbase_archive.timer.FILE_ROTATE_TIME = ' "$FILE_ROTATE_TIME"
+# if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
 # dynamic modify timer interval
