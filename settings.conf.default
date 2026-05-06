@@ -194,8 +194,8 @@ rtcm_serial_receiver_options=''
 
 #log directory
 logdir=$BASEDIR/logs
-#log trace level (10: debug)
-level=10
+#log trace level (10: debug, 0: no trace)
+level=0
 
 [network]
 #lte modem port
