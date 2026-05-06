@@ -1,10 +1,4 @@
 #!/bin/bash
-BASEDIR="$(dirname "$0")"
-# load config
-source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
-
-GDRIVE_REMOTE="gdrive:GNSS_IR_Data"
-RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
 
 # If the target user is still root, abort the script immediately to avoid path corruption
 if [ "$HOME" = "/root" ]; then
@@ -14,7 +8,33 @@ if [ "$HOME" = "/root" ]; then
     exit 1
 fi
 
-# 2. filter time (rotate time to mins minus 2 mins buffer)
+BASEDIR="$(dirname "$0")"
+# load config
+source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+
+GDRIVE_REMOTE="gdrive:GNSS_IR_Data"  # you may need to change this to your actual rclone remote name and path
+RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
+RCLONE_CONF_TMP="/tmp/rclone.conf"
+
+# Writable RAM copy of rclone.conf to stop Token Refresh Read-Only errors
+if [ -f "$RCLONE_CONF" ]; then
+    cp "$RCLONE_CONF" "$RCLONE_CONF_TMP"
+else
+    echo "Error: Rclone configuration file not found at $RCLONE_CONF"
+    exit 1
+fi
+
+if [ ! -f "$RCLONE_CONF_TMP" ]; then
+    if [ -f "$RCLONE_CONF" ]; then
+        cp "$RCLONE_CONF" "$RCLONE_CONF_TMP"
+        echo "copy ${RCLONE_CONF} to ${RCLONE_CONF_TMP}"
+    else
+        echo "Error：${RCLONE_CONF} does not exist, please check your rclone installation and configuration."
+        exit 1
+    fi
+fi
+
+# filter time (rotate time to mins minus 2 mins buffer)
 # for example: if file_rotate_time='1'，filter out files before 1*60 - 2 = 59 mins
 if [ -n "${file_rotate_time}" ]; then
     buffer_minutes=$(awk -v t="$file_rotate_time" 'BEGIN {print int(t * 60 - 2)}')
@@ -29,15 +49,13 @@ cd "${datadir}" || exit 1
 for file in *.ubx; do
     [[ -e "$file" ]] || continue
 
-    # 3. filter out and protect the current writing file
+    # filter out and protect the current writing file
     if [[ $(find "$file" -mmin +"${buffer_minutes}") ]]; then
-        echo "Compressing old file: $file"
+        echo "Compressing raw data file: $file"
         gzip -c "$file" > "${file}.gz"
 
-        # 4. upload to Google Drive
-        # rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF}"
-        # Append --read-only-config to prevent rclone from rewriting rclone.conf
-        rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF}" --no-update-modtime --read-only-config
+        # upload to Google Drive
+        rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
 
         if [ $? -eq 0 ]; then
             echo "Sync successfully, delete source file: $file"
