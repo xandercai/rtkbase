@@ -17,13 +17,6 @@ RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
 RCLONE_CONF_TMP="/tmp/rclone.conf"
 
 # Writable RAM copy of rclone.conf to stop Token Refresh Read-Only errors
-if [ -f "$RCLONE_CONF" ]; then
-    cp "$RCLONE_CONF" "$RCLONE_CONF_TMP"
-else
-    echo "Error: Rclone configuration file not found at $RCLONE_CONF"
-    exit 1
-fi
-
 if [ ! -f "$RCLONE_CONF_TMP" ]; then
     if [ -f "$RCLONE_CONF" ]; then
         cp "$RCLONE_CONF" "$RCLONE_CONF_TMP"
