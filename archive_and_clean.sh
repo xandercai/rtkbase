@@ -7,7 +7,7 @@ GDRIVE_REMOTE="gdrive:GNSS_IR_Data"
 RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
 
 # If the target user is still root, abort the script immediately to avoid path corruption
-if [ "$TARGET_USER" = "root" ]; then
+if [ "$HOME" = "/root" ]; then
     echo "Error: The identified user is 'root'."
     echo "This can happen if you used 'sudo su' or executed the script directly as the root user."
     echo "Please log in as a normal user (e.g., 'pi' or 'base') and run: sudo ./mount_tmpfs.sh"
