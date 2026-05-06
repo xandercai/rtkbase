@@ -35,7 +35,7 @@ for file in *.ubx; do
         gzip -c "$file" > "${file}.gz"
 
         # 4. upload to Google Drive
-        rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF}"
+        rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF}" --no-update-modtime --read-only
 
         if [ $? -eq 0 ]; then
             echo "Sync successfully, delete source file: $file"
