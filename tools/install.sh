@@ -217,9 +217,9 @@ _compil_rtklib() {
 _rtkbase_repo(){
     #Get rtkbase repository
     if [[ -n "${1}" ]]; then
-      sudo -u "${RTKBASE_USER}" git clone --branch "${1}" --single-branch https://github.com/xandercai/rtkbase.git
+      sudo -u "${RTKBASE_USER}" git clone --branch "${1}" --single-branch --depth 1 https://github.com/xandercai/rtkbase.git
     else
-      sudo -u "${RTKBASE_USER}" git clone https://github.com/xandercai/rtkbase.git
+      sudo -u "${RTKBASE_USER}" git clone --depth 1 https://github.com/xandercai/rtkbase.git
     fi
     _add_rtkbase_path_to_environment
 
