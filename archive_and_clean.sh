@@ -4,7 +4,15 @@ BASEDIR="$(dirname "$0")"
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
 
 GDRIVE_REMOTE="gdrive:GNSS_IR_Data"
-RCLONE_CONF="/home/xcai/.config/rclone/rclone.conf"  # you may need to change user name
+RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
+
+# If the target user is still root, abort the script immediately to avoid path corruption
+if [ "$TARGET_USER" = "root" ]; then
+    echo "Error: The identified user is 'root'."
+    echo "This can happen if you used 'sudo su' or executed the script directly as the root user."
+    echo "Please log in as a normal user (e.g., 'pi' or 'base') and run: sudo ./mount_tmpfs.sh"
+    exit 1
+fi
 
 # 2. filter time (rotate time to mins minus 2 mins buffer)
 # for example: if file_rotate_time='1'，filter out files before 1*60 - 2 = 59 mins
@@ -14,7 +22,7 @@ else
     buffer_minutes=1438 # default filter time 1 day
 fi
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and upload new .ubx files before ${buffer_minutes} mins..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and upload new .ubx files in ${datadir} before ${buffer_minutes} mins..."
 
 cd "${datadir}" || exit 1
 
