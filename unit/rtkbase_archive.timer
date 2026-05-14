@@ -2,9 +2,8 @@
 Description=RTKBase archive and upload timer
 
 [Timer]
-# the first run after boot 5 mins
-OnBootSec=5min
-# placeholder for copy_unit.sh during installation
+# the first run after boot init mins
+OnBootSec={{INITIAL_TIME}}
 OnUnitActiveSec={{ROTATE_INTERVAL}}
 Unit=rtkbase_archive.service
 

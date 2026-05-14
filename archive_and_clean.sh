@@ -27,14 +27,6 @@ if [ ! -f "$RCLONE_CONF_TMP" ]; then
     fi
 fi
 
-# filter time (rotate time to mins minus 2 mins buffer)
-# for example: if file_rotate_time='1'，filter out files before 1*60 - 2 = 59 mins
-if [ -n "${file_rotate_time}" ]; then
-    buffer_minutes=$(awk -v t="$file_rotate_time" 'BEGIN {print int(t * 60 - 2)}')
-else
-    buffer_minutes=1438 # default filter time 1 day
-fi
-
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and upload new .ubx files in ${datadir} before ${buffer_minutes} mins..."
 
 cd "${datadir}" || exit 1
@@ -42,20 +34,31 @@ cd "${datadir}" || exit 1
 for file in *.ubx; do
     [[ -e "$file" ]] || continue
 
-    # filter out and protect the current writing file
-    if [[ $(find "$file" -mmin +"${buffer_minutes}") ]]; then
+    # default 5 time in minutes to avoid processing files that are still being written
+    if [[ $(find "$file" -mmin +5) ]]; then
         echo "Compressing raw data file: $file"
-        gzip -c "$file" > "${file}.gz"
+        # gzip -c "$file" > "${file}.gz"  # backup method: gzip, faster but less compression
+
+        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file}.7z" "$file" >/dev/null 2>&1
+        # -t7z: Forces the 7z archive format, which has a higher compression density than .zip or .gz.
+        # -m0=lzma2: Employs the LZMA2 algorithm, which achieves significantly better data-tightness than Deflate (gzip) or Zstd.
+        # -mx=9: Sets the compression level to "Ultra".
+        # -md=128m: Sets the Dictionary Size to 128 Megabytes. If GNSS file is 15MB, a 128MB dictionary ensures the algorithm analyzes the entire file as a single block, maximizing pattern matching.
+        # -mfb=273: Sets the Fast Bytes length to 273 (the maximum possible). This forces the engine to meticulously scan for the longest possible matching strings of data.
+        # -ms=on: Enables Solid Archiving. It binds all data into a single continuous stream, which yields massive space savings if you compress multiple files or text blocks.
+        # -mhc=on: Compresses the archive headers themselves, shrinking the final file by a few extra kilobytes.
 
         # upload to Google Drive
-        rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
+        # rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
+        rclone move "${file}.7z" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
 
         if [ $? -eq 0 ]; then
             echo "Sync successfully, delete source file: $file"
             rm -f "$file"
         else
             echo "Sync failed, try again later: $file"
-            rm -f "${file}.gz"
+            # rm -f "${file}.gz"
+            rm -f "${file}.7z"
         fi
     fi
 done

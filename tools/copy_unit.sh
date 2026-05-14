@@ -53,8 +53,14 @@ echo 'Configue rtkbase_archive.timer.FILE_ROTATE_TIME = ' "$FILE_ROTATE_TIME"
 # if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
-# dynamic modify timer interval
+INIT_TIME=$(grep '^init_time=' "${BASEDIR}/settings.conf.default" | cut -d"'" -f2)
+echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
+# if undefined then 2 minutes for initial GNSS searching delay before first run
+if [ -z "$INIT_TIME" ]; then INIT_TIME=2; fi
+
+# dynamic modify timer ini
 sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_TIME}h/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}m/g" "${BASEDIR}/unit/rtkbase_archive.timer"
 # <-xcai
 
 
