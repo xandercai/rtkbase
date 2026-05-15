@@ -50,7 +50,7 @@ for file in *.ubx; do
 
         # upload to Google Drive
         # rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
-        rclone move "${file}.7z" "${file%.*}.7z" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
+        rclone move "${file%.*}.7z" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
 
         if [ $? -eq 0 ]; then
             echo "Sync successfully, delete source file: $file"
