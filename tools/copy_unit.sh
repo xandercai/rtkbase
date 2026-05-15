@@ -55,9 +55,10 @@ elif [ -f "${BASEDIR}/settings.conf.default" ]; then
 else
     # Error handling if neither file exists
     echo "Error: Neither '${BASEDIR}/settings.conf' nor '${BASEDIR}/settings.conf.default'."
+    exit 1
 fi
 
-FILE_ROTATE_TIME=$(grep '^file_rotate_time=' conf_file | cut -d"'" -f2)
+FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "$conf_file" | cut -d"'" -f2)
 
 # if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
@@ -73,13 +74,13 @@ if [[ "$FILE_ROTATE_TIME" == *.* ]]; then
     fi
 
     FILE_ROTATE_TIME_UNIT_STRING="${time_in_minutes}min"
-# else
+else
     # It's a clean integer, keep it as hours
     FILE_ROTATE_TIME_UNIT_STRING="${FILE_ROTATE_TIME}h"
 fi
 
 
-INIT_TIME=$(grep '^init_time=' conf_file | cut -d"'" -f2)
+INIT_TIME=$(grep '^init_time=' "$conf_file" | cut -d"'" -f2)
 # if undefined then 2 minutes for initial GNSS searching delay before first run
 if [ -z "$INIT_TIME" ]; then INIT_TIME=5; fi
 
