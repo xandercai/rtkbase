@@ -27,7 +27,7 @@ if [ ! -f "$RCLONE_CONF_TMP" ]; then
     fi
 fi
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and upload new .ubx files in ${datadir} before ${buffer_minutes} mins..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and upload new .ubx files in ${datadir} every ${file_rotate_time} hour..."
 
 cd "${datadir}" || exit 1
 
@@ -39,7 +39,7 @@ for file in *.ubx; do
         echo "Compressing raw data file: $file"
         # gzip -c "$file" > "${file}.gz"  # backup method: gzip, faster but less compression
 
-        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file}.7z" "$file" >/dev/null 2>&1
+        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file%.*}.7z" "$file" >/dev/null 2>&1
         # -t7z: Forces the 7z archive format, which has a higher compression density than .zip or .gz.
         # -m0=lzma2: Employs the LZMA2 algorithm, which achieves significantly better data-tightness than Deflate (gzip) or Zstd.
         # -mx=9: Sets the compression level to "Ultra".
@@ -50,7 +50,7 @@ for file in *.ubx; do
 
         # upload to Google Drive
         # rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
-        rclone move "${file}.7z" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
+        rclone move "${file}.7z" "${file%.*}.7z" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
 
         if [ $? -eq 0 ]; then
             echo "Sync successfully, delete source file: $file"
@@ -58,7 +58,7 @@ for file in *.ubx; do
         else
             echo "Sync failed, try again later: $file"
             # rm -f "${file}.gz"
-            rm -f "${file}.7z"
+            rm -f "${file%.*}.7z"
         fi
     fi
 done
