@@ -48,19 +48,47 @@ if [ "$VALID_ARGUMENTS" != "0" ]; then
 #echo 'user=' "${ARG_USER}"
 
 # xcai->
-FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "${BASEDIR}/settings.conf.default" | cut -d"'" -f2)
-echo 'Configue rtkbase_archive.timer.FILE_ROTATE_TIME = ' "$FILE_ROTATE_TIME"
+if [ -f "${BASEDIR}/settings.conf" ]; then
+  conf_file="${BASEDIR}/settings.conf"
+elif [ -f "${BASEDIR}/settings.conf.default" ]; then
+  conf_file="${BASEDIR}/settings.conf.default"
+else
+    # Error handling if neither file exists
+    echo "Error: Neither '${BASEDIR}/settings.conf' nor '${BASEDIR}/settings.conf.default'."
+fi
+
+FILE_ROTATE_TIME=$(grep '^file_rotate_time=' conf_file | cut -d"'" -f2)
+
 # if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
-INIT_TIME=$(grep '^init_time=' "${BASEDIR}/settings.conf.default" | cut -d"'" -f2)
-echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
+if [[ "$FILE_ROTATE_TIME" == *.* ]]; then
+    # Convert hours directly to minutes using bc (e.g., 0.1 * 60 = 6)
+    # If bc is missing, install it with: sudo apt install bc
+    time_in_minutes=$(echo "$FILE_ROTATE_TIME * 60" | bc | cut -d'.' -f1)
+
+    # Safety fallback if the calculation results in 0 minutes
+    if [ "$time_in_minutes" -eq 0 ] || [ -z "$time_in_minutes" ]; then
+        time_in_minutes=6
+    fi
+
+    FILE_ROTATE_TIME_UNIT_STRING="${time_in_minutes}min"
+# else
+    # It's a clean integer, keep it as hours
+    FILE_ROTATE_TIME_UNIT_STRING="${FILE_ROTATE_TIME}h"
+fi
+
+
+INIT_TIME=$(grep '^init_time=' conf_file | cut -d"'" -f2)
 # if undefined then 2 minutes for initial GNSS searching delay before first run
-if [ -z "$INIT_TIME" ]; then INIT_TIME=2; fi
+if [ -z "$INIT_TIME" ]; then INIT_TIME=5; fi
 
 # dynamic modify timer ini
-sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_TIME}h/g" "${BASEDIR}/unit/rtkbase_archive.timer"
-sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}m/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+echo 'Configue rtkbase_archive.timer.FILE_ROTATE_TIME = ' "$FILE_ROTATE_TIME_UNIT_STRING"
+sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_TIME_UNIT_STRING}/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+
+echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
+sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}min/g" "${BASEDIR}/unit/rtkbase_archive.timer"
 # <-xcai
 
 
