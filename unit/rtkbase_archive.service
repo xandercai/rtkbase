@@ -4,7 +4,7 @@ Description=RTKBase - Archiving and cleaning raw data
 [Service]
 Type=oneshot
 User={user}
-ExecStartPre=/bin/bash {script_path}/update_timer.sh
+ExecStartPre=+/bin/bash {script_path}/update_timer.sh
 ExecStart=/bin/bash {script_path}/archive_and_clean.sh
 # ReadWritePaths={script_path}
 # Ensure systemd uses the real global /tmp instead of a restricted sandbox

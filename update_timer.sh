@@ -45,7 +45,7 @@ Unit=rtkbase_archive.service
 WantedBy=timers.target
 EOF
 
-sudo systemctl daemon-reload
-sudo systemctl restart rtkbase_archive.timer
+systemctl daemon-reload
+systemctl restart rtkbase_archive.timer
 
 echo "Success: Timer synchronized safely to ${UNIT_STRING}"
