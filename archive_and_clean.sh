@@ -9,14 +9,14 @@ if [ "$HOME" = "/root" ]; then
 fi
 
 BASEDIR="$(dirname "$0")"
-# load config
+
+# Load configuration variables
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
 
-GDRIVE_REMOTE="gdrive:GNSS_IR_Data"  # you may need to change this to your actual rclone remote name and path
+GDRIVE_REMOTE="gdrive:GNSS_IR_Data" # Change this to your actual rclone remote name and path
 RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
-RCLONE_CONF_TMP="/tmp/rclone.conf"
+RCLONE_CONF_TMP="/tmp/rclone.conf" # Writable RAM copy of rclone.conf to stop Token Refresh Read-Only errors
 
-# Writable RAM copy of rclone.conf to stop Token Refresh Read-Only errors
 if [ ! -f "$RCLONE_CONF_TMP" ]; then
     if [ -f "$RCLONE_CONF" ]; then
         cp "$RCLONE_CONF" "$RCLONE_CONF_TMP"
@@ -27,38 +27,74 @@ if [ ! -f "$RCLONE_CONF_TMP" ]; then
     fi
 fi
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and upload new .ubx files in ${datadir} every ${file_rotate_time} hour..."
-
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and compress new .ubx files in ${datadir} every ${file_rotate_time} hour..."
 cd "${datadir}" || exit 1
 
+# Initialize an array to keep track of files successfully compressed during this run
+processed_files=()
+
+# ----------------- STEP 1: COMPRESSION ONLY -----------------
+# Batch compress all eligible .ubx files into .7z archives without triggering rclone yet
 for file in *.ubx; do
     [[ -e "$file" ]] || continue
 
-    # default 5 time in minutes to avoid processing files that are still being written
+    # Default 5-minute age check to avoid processing files that are still being written by the system
     if [[ $(find "$file" -mmin +5) ]]; then
         echo "Compressing raw data file: $file"
-        # gzip -c "$file" > "${file}.gz"  # backup method: gzip, faster but less compression
 
+        # 7z parameters optimized for high pattern-matching density on GNSS streams
         7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file%.*}.7z" "$file" >/dev/null 2>&1
-        # -t7z: Forces the 7z archive format, which has a higher compression density than .zip or .gz.
-        # -m0=lzma2: Employs the LZMA2 algorithm, which achieves significantly better data-tightness than Deflate (gzip) or Zstd.
-        # -mx=9: Sets the compression level to "Ultra".
-        # -md=128m: Sets the Dictionary Size to 128 Megabytes. If GNSS file is 15MB, a 128MB dictionary ensures the algorithm analyzes the entire file as a single block, maximizing pattern matching.
-        # -mfb=273: Sets the Fast Bytes length to 273 (the maximum possible). This forces the engine to meticulously scan for the longest possible matching strings of data.
-        # -ms=on: Enables Solid Archiving. It binds all data into a single continuous stream, which yields massive space savings if you compress multiple files or text blocks.
-        # -mhc=on: Compresses the archive headers themselves, shrinking the final file by a few extra kilobytes.
-
-        # upload to Google Drive
-        # rclone move "${file}.gz" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
-        rclone move "${file%.*}.7z" "${GDRIVE_REMOTE}" --config "${RCLONE_CONF_TMP}" --no-update-modtime
 
         if [ $? -eq 0 ]; then
-            echo "Sync successfully, delete source file: $file"
-            rm -f "$file"
+            # Record successfully compressed file names for later step verification
+            processed_files+=("$file")
         else
-            echo "Sync failed, try again later: $file"
-            # rm -f "${file}.gz"
+            echo "Compression failed for: $file"
             rm -f "${file%.*}.7z"
         fi
     fi
 done
+
+# Terminate early if there are no compressed files ready for upload
+if [ ${#processed_files[@]} -eq 0 ]; then
+    echo "No files ready for upload."
+    exit 0
+fi
+
+# ----------------- STEP 2: BATCH UPLOAD VIA SINGLE RCLONE CALL -----------------
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload to Google Drive..."
+
+# Temporary log file to track rclone operation results for local sync logic
+RCLONE_LOG="/tmp/rclone_upload.log"
+
+# Trigger a single rclone session with built-in API throttling and exponential backoff.
+# '--tpslimit 10' restricts transactions per second to strictly avoid 403 quota errors.
+# 'rclone move' automatically drops local .7z copies only upon verified cloud delivery.
+rclone move "./" "${GDRIVE_REMOTE}" \
+    --config "${RCLONE_CONF_TMP}" \
+    --no-update-modtime \
+    --include "*.7z" \
+    --transfers 4 \
+    --checkers 8 \
+    --tpslimit 10 \
+    --log-level INFO \
+    --log-file "$RCLONE_LOG"
+
+# ----------------- STEP 3: SAFE CLEANUP OF ORIGINAL SOURCE FILES -----------------
+echo "Cleaning up local source .ubx files..."
+for file in "${processed_files[@]}"; do
+    sevenz_name="${file%.*}.7z"
+
+    # Verify if the .7z archive was wiped by rclone, or confirm successful transfer via the log
+    if [ ! -f "$sevenz_name" ] && grep -q -E "Moved|Copied" "$RCLONE_LOG" 2>/dev/null; then
+        echo "Sync successfully, delete source file: $file"
+        rm -f "$file"
+    else
+        # If the local .7z remains, the transfer failed. Keep the .ubx source for retry cycles.
+        echo "Sync failed, keeping source file for next run: $file"
+    fi
+done
+
+# Wipe the temporary transaction log file
+rm -f "$RCLONE_LOG"
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Batch job finished."
