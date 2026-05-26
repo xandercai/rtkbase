@@ -39,7 +39,7 @@ for file in *.ubx; do
     [[ -e "$file" ]] || continue
 
     # Default 5-minute age check to avoid processing files that are still being written by the system
-    if [[ $(find "$file" -mmin +5) ]]; then
+    if [[ $(find "$file" -mmin +1) ]]; then
         echo "Compressing raw data file: $file"
 
         # 7z parameters optimized for high pattern-matching density on GNSS streams

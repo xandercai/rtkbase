@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# This script updates the systemd timer for RTKBase archive and upload based on the file_rotate_time setting.
+# It safely handles both integer and decimal hour values, converting them to appropriate systemd timer units (hours or minutes).
+# Usage: sudo ./update_timer.sh
+# Note: This script must be run with sudo to modify systemd timer files.
+
 BASEDIR="$(dirname "$0")"
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' ) #import settings
 
