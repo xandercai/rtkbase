@@ -71,7 +71,8 @@ init_time='5'
 file_name='%Y-%m-%d_%h-%M-%S_GNSS'
 #file rotate time in hour
 # xcai file_rotate_time='24'
-file_rotate_time='1'
+# only support 1, 2, 3, 4, 6, 8, 12, 24 hours for now
+file_rotate_time='2'
 #file overlap time in seconds
 file_overlap_time='0'
 #name for the compressed archive
