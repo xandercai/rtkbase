@@ -65,13 +65,13 @@ if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
 # upload every 1 hour
 if [ "$FILE_ROTATE_TIME" -eq 1 ]; then
-    FILE_ROTATE_INTERVAL="*-*-* *:01:00"
+    FILE_ROTATE_INTERVAL="*-*-* *:01:02"
 # upload every 24 hours
 elif [ "$FILE_ROTATE_TIME" -eq 24 ]; then
-    FILE_ROTATE_INTERVAL="*-*-* 00:01:00"
+    FILE_ROTATE_INTERVAL="*-*-* 00:01:02"
 else
 # only support 2, 3, 4, 6, 8, 12 hours for now, which are all divisors of 24
-    FILE_ROTATE_INTERVAL="*-*-* */${FILE_ROTATE_TIME}:01:00"
+    FILE_ROTATE_INTERVAL="*-*-* */${FILE_ROTATE_TIME}:01:02"
 fi
 
 INIT_TIME=$(grep '^init_time=' "$conf_file" | cut -d"'" -f2)
