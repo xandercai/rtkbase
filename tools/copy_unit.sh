@@ -63,30 +63,24 @@ FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "$conf_file" | cut -d"'" -f2)
 # if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
-if [[ "$FILE_ROTATE_TIME" == *.* ]]; then
-    # Convert hours directly to minutes using bc (e.g., 0.1 * 60 = 6)
-    # If bc is missing, install it with: sudo apt install bc
-    time_in_minutes=$(echo "$FILE_ROTATE_TIME * 60" | bc | cut -d'.' -f1)
-
-    # Safety fallback if the calculation results in 0 minutes
-    if [ "$time_in_minutes" -eq 0 ] || [ -z "$time_in_minutes" ]; then
-        time_in_minutes=6
-    fi
-
-    FILE_ROTATE_TIME_UNIT_STRING="${time_in_minutes}min"
+# upload every 1 hour
+if [ "$FILE_ROTATE_TIME" -eq 1 ]; then
+    FILE_ROTATE_INTERVAL="*-*-* *:01:00"
+# upload every 24 hours
+elif [ "$FILE_ROTATE_TIME" -eq 24 ]; then
+    FILE_ROTATE_INTERVAL="*-*-* 00:01:00"
 else
-    # It's a clean integer, keep it as hours
-    FILE_ROTATE_TIME_UNIT_STRING="${FILE_ROTATE_TIME}h"
+# only support 2, 3, 4, 6, 8, 12 hours for now, which are all divisors of 24
+    FILE_ROTATE_INTERVAL="*-*-* */${FILE_ROTATE_TIME}:01:00"
 fi
 
-
 INIT_TIME=$(grep '^init_time=' "$conf_file" | cut -d"'" -f2)
-# if undefined then 2 minutes for initial GNSS searching delay before first run
+# if undefined then 5 minutes for initial GNSS searching delay before first run
 if [ -z "$INIT_TIME" ]; then INIT_TIME=5; fi
 
 # dynamic modify timer ini
-echo 'Configue rtkbase_archive.timer.FILE_ROTATE_TIME = ' "$FILE_ROTATE_TIME_UNIT_STRING"
-sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_TIME_UNIT_STRING}/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+echo 'Configue rtkbase_archive.timer.ROTATE_INTERVAL = ' "$FILE_ROTATE_INTERVAL"
+sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_INTERVAL}/g" "${BASEDIR}/unit/rtkbase_archive.timer"
 
 echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
 sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}min/g" "${BASEDIR}/unit/rtkbase_archive.timer"

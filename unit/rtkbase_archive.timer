@@ -1,10 +1,13 @@
 [Unit]
 Description=RTKBase archive and upload timer
+After=network.target
 
 [Timer]
 # the first run after boot init mins
 OnBootSec={{INITIAL_TIME}}
-OnUnitActiveSec={{ROTATE_INTERVAL}}
+# OnUnitActiveSec={{ROTATE_INTERVAL}}
+OnCalendar={{ROTATE_INTERVAL}}
+AccuracySec=1us
 Unit=rtkbase_archive.service
 
 [Install]
