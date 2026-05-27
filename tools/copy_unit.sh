@@ -80,7 +80,9 @@ if [ -z "$INIT_TIME" ]; then INIT_TIME=5; fi
 
 # dynamic modify timer ini
 echo 'Configue rtkbase_archive.timer.ROTATE_INTERVAL = ' "$FILE_ROTATE_INTERVAL"
-sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_INTERVAL}/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+# sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_INTERVAL}/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+# "/" may not work if use "*-*-* */${FILE_ROTATE_TIME}:01:02"
+sed -i "s|{{ROTATE_INTERVAL}}|${FILE_ROTATE_INTERVAL}|g" "${BASEDIR}/unit/rtkbase_archive.timer"
 
 echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
 sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}min/g" "${BASEDIR}/unit/rtkbase_archive.timer"
