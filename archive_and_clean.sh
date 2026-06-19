@@ -95,18 +95,19 @@ cd "${datadir}" || exit 1
 
 # ----------------- STEP 1: COMPRESSION ONLY -----------------
 processed_files=()
+HOSTNAME=$(hostname)
 
 for file in *.ubx; do
     [[ -e "$file" ]] || continue
 
     if [[ $(find "$file" -mmin +1) ]]; then
         echo "Compressing raw data file: $file"
-        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file%.*}.7z" "$file" >/dev/null 2>&1
+        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file%.*}_${HOSTNAME}.7z" "$file" >/dev/null 2>&1
         if [ $? -eq 0 ]; then
             processed_files+=("$file")
         else
             echo "Compression failed for: $file"
-            rm -f "${file%.*}.7z"
+            rm -f "${file%.*}_${HOSTNAME}.7z"
         fi
     fi
 done
@@ -138,7 +139,7 @@ rclone move "./" "${GDRIVE_REMOTE}" \
 echo "Cleaning up local source .ubx files..."
 
 for file in "${processed_files[@]}"; do
-    sevenz_name="${file%.*}.7z"
+    sevenz_name="${file%.*}_${HOSTNAME}.7z"
     if [ ! -f "$sevenz_name" ] && grep -q -E "Moved|Copied" "$RCLONE_LOG" 2>/dev/null; then
         echo "Sync successfully, delete source file: $file"
         rm -f "$file"
