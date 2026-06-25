@@ -122,6 +122,31 @@ install_dependencies() {
       #apt-get "${APT_TIMEOUT}" upgrade -y
 }
 
+install_tailscale() {
+    echo '################################'
+    echo 'INSTALLING TAILSCALE'
+    echo '################################'
+    if command -v tailscale &>/dev/null; then
+        echo 'Tailscale is already installed, skipping.'
+        systemctl enable tailscaled 2>/dev/null || true
+        return 0
+    fi
+    # Official Tailscale install script (supports Debian/Raspberry Pi OS)
+    curl -fsSL https://tailscale.com/install.sh | sh || { echo 'Tailscale installation failed.' ; return 1 ;}
+    systemctl enable tailscaled
+    chmod +x "${rtkbase_path}"/tools/tailscale_watchdog.sh
+    echo ''
+    echo '################################'
+    echo 'TAILSCALE INSTALLED'
+    echo 'ACTION REQUIRED: before deploying to the field, run:'
+    echo ''
+    echo '    sudo tailscale up'
+    echo ''
+    echo 'Open the URL shown on screen in a browser to authenticate this device.'
+    echo 'The watchdog timer will keep Tailscale and SSH alive automatically.'
+    echo '################################'
+}
+
 install_gpsd_chrony() {
     echo '################################'
     echo 'CONFIGURING FOR USING GPSD + CHRONY'
@@ -357,15 +382,6 @@ rtkbase_requirements(){
       source "${rtkbase_path}/tools/opizero_temp_offset.sh"
       #venv module installation
       sudo -u "${RTKBASE_USER}" "${python_venv}" -m pip install --upgrade pip setuptools wheel  --extra-index-url https://www.piwheels.org/simple
-      # install prebuilt wheel for cryptography because it is unavailable on piwheels (2023/01)
-      # not needed anymore (2023/11)
-      #if [[ $platform == 'armv7l' ]] && [[ $("${python_venv}" --version) =~ '3.7' ]]
-      #  then 
-      #    sudo -u "${RTKBASE_USER}" "${python_venv}" -m pip install "${rtkbase_path}"/tools/wheel/cryptography-38.0.0-cp37-cp37m-linux_armv7l.whl
-      #elif [[ $platform == 'armv6l' ]] && [[ $("${python_venv}" --version) =~ '3.7' ]]
-      #  then
-      #    sudo -u "${RTKBASE_USER}" "${python_venv}" -m pip install "${rtkbase_path}"/tools/wheel/cryptography-38.0.0-cp37-cp37m-linux_armv6l.whl
-      #fi
       sudo -u "${RTKBASE_USER}" "${python_venv}" -m pip install -r "${rtkbase_path}"/web_app/requirements.txt  --extra-index-url https://www.piwheels.org/simple
       #when we will be able to launch the web server without root, we will use
       #sudo -u $(logname) python3 -m pip install -r requirements.txt --user.
@@ -496,10 +512,6 @@ detect_gnss() {
       if [[ ${#detected_gnss[*]} -eq 5 ]] && [[ "${1}" -eq 0 ]]
         then
           echo 'GNSS RECEIVER DETECTED: /dev/'"${detected_gnss[0]}" ' - ' "${detected_gnss[1]}" ' - ' "${detected_gnss[2]}" ' - ' "${detected_gnss[3]}"' - ' "${detected_gnss[4]}"
-          #if [[ ${detected_gnss[1]} =~ 'u-blox' ]]
-          #then
-          #  gnss_format='ubx'
-          #fi
           if [[ -f "${rtkbase_path}/settings.conf" ]]  && grep -qE "^com_port=.*" "${rtkbase_path}"/settings.conf #check if settings.conf exists
           then
             #change the com port value/settings inside settings.conf
@@ -710,6 +722,12 @@ start_services() {
   systemctl enable --now rtkbase_archive.timer
   grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now modem_check.timer
   grep -q "receiver='Septentrio_Mosaic-X5'" "${rtkbase_path}"/settings.conf && systemctl enable --now rtkbase_gnss_web_proxy.service
+  # Enable Tailscale watchdog timer (checks every 5 minutes)
+  if command -v tailscale &>/dev/null; then
+    systemctl enable --now tailscaled
+    systemctl enable --now tailscale_watchdog.timer
+    echo 'Tailscale watchdog enabled. Run "sudo tailscale up" to authenticate if not done yet.'
+  fi
   echo '################################'
   echo 'END OF INSTALLATION'
   echo 'You can open your browser to http://'"$(hostname -I)"
@@ -820,7 +838,6 @@ main() {
   cumulative_exit=0
   [ $ARG_HELP -eq 1 ] && man_help
   _check_user "${ARG_USER}" ; echo 'user for RTKBase is: ' "${RTKBASE_USER}"
-  #if [ $ARG_USER != 0 ] ;then echo 'user:' "${ARG_USER}"; check_user "${ARG_USER}"; else ;fi
   if [ $ARG_ALL != 0 ] 
   then
     # test if rtkbase source option is correct
@@ -829,6 +846,7 @@ main() {
     [[ $ARG_ALL == 'url' ]] && [[ "${ARG_RTKBASE_SRC}" == "0" ]] && { echo 'you have to specify the url with --rtkbase-custom' ; exit 1 ;}
     #Okay launching installation
     install_dependencies && \
+    install_tailscale    && \
     case $ARG_ALL in
       release)
         install_rtkbase_from_release

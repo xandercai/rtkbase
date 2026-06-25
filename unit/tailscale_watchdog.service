@@ -1,0 +1,10 @@
+[Unit]
+Description=Tailscale & SSH watchdog
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash {script_path}/tools/tailscale_watchdog.sh
+StandardOutput=journal
+StandardError=journal
