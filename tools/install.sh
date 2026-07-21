@@ -813,6 +813,13 @@ _add_mppt_config(){
     return 1
   fi
   echo 'mppt_port set to /dev/epever485 in settings.conf'
+  # start_services() only enables mppt_charge_guard.timer if mppt_port is
+  # already set at the moment IT runs - on a fresh --all install that's
+  # before this function ever gets a chance to set it (--detect-mppt is a
+  # separate, later, opt-in step), so nothing else will go back and enable
+  # it once mppt_port finally is set. Do it here instead.
+  systemctl daemon-reload
+  systemctl enable --now mppt_charge_guard.timer
 }
 
 start_services() {
