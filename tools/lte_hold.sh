@@ -12,4 +12,4 @@ HOLD_FLAG="/tmp/rtkbase_lte_hold"
 
 touch "$HOLD_FLAG"
 echo "Auto flight-mode schedule paused (${HOLD_FLAG} created)."
-"${BASEDIR}/tools/lte_on.sh"
+bash "${BASEDIR}/tools/lte_on.sh"

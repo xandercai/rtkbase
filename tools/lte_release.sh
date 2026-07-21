@@ -8,4 +8,4 @@ HOLD_FLAG="/tmp/rtkbase_lte_hold"
 
 rm -f "$HOLD_FLAG"
 echo "Auto flight-mode schedule resumed (${HOLD_FLAG} removed)."
-"${BASEDIR}/tools/lte_off.sh"
+bash "${BASEDIR}/tools/lte_off.sh"

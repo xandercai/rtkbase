@@ -175,7 +175,7 @@ rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_T
 # if called again later by the timer.
 if [ "${lte_schedule_mode:-fixed_window}" = "upload_window" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done (upload_window mode), switching LTE modem off..."
-    "${BASEDIR}/tools/lte_off.sh"
+    bash "${BASEDIR}/tools/lte_off.sh"
 fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Batch job finished."
