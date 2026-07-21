@@ -135,7 +135,7 @@ fi
 
 # ----------------- STEP 4: THERMAL SENSOR (point-in-time snapshot) -----------------
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
-if "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
+if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
     rclone copyto "${THERMAL_TMP}" "${GDRIVE_THERMAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_thermal.json" \
         --config "${RCLONE_CONF_TMP}" \

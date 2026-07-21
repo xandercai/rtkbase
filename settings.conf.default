@@ -222,6 +222,8 @@ mppt_baudrate='115200'
 mppt_slave_id='1'
 
 [thermal]
-# GPIO pin (BCM numbering) wired to the 1-Wire (DS18B20-class) temperature
-# sensor. install.sh configures the matching w1-gpio dtoverlay automatically.
-thermal_gpio_pin='7'
+# GPIO pin (BCM/Broadcom numbering, not the physical header pin number) wired
+# to the 1-Wire (DS18B20-class) temperature sensor. BCM4 = physical pin 7,
+# the default 1-Wire pin on Raspberry Pi OS. install.sh configures the
+# matching w1-gpio dtoverlay automatically.
+thermal_gpio_pin='4'
