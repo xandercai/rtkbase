@@ -209,12 +209,29 @@ modem_baudrate='115200'
 
 [lte]
 # Power-saving schedule: keep the LTE modem in airplane mode (AT+CFUN=0)
-# except around the upload window, when archive_and_clean.sh runs. The
-# lte_modem_on.timer wakes it this many minutes before the scheduled upload
-# so it has time to register on the network; archive_and_clean.sh switches
-# it back off right after all four sources finish uploading. Only takes
-# effect when modem_at_port above is set.
+# except around the upload window. lte_modem_on.timer always wakes it
+# lte_on_before_minutes ahead of the scheduled upload. How it turns back
+# off depends on lte_schedule_mode. Only takes effect when modem_at_port
+# above is set.
 lte_on_before_minutes='2'
+
+# 'fixed_window' (default): lte_modem_off.timer turns the modem off exactly
+#   lte_online_minutes after lte_modem_on.timer, every cycle, regardless of
+#   whether archive_and_clean.sh has finished. Predictable SSH window, but
+#   burns power for the rest of that window once uploads are already done.
+# 'upload_window': archive_and_clean.sh turns the modem off itself right
+#   after all four sources finish uploading - more power-efficient since it
+#   doesn't wait around once the work is done. lte_modem_off.timer stays
+#   enabled as a safety net in this mode too: if archive_and_clean.sh ever
+#   hangs before reaching that step, the modem still gets force-switched
+#   off at the lte_online_minutes deadline instead of staying on forever.
+lte_schedule_mode='fixed_window'
+
+# total time the modem stays on per cycle at most, counted from
+# lte_modem_on.timer. In fixed_window mode this is the actual on-duration;
+# in upload_window mode it's the safety-net ceiling. Must be comfortably
+# longer than lte_on_before_minutes + how long uploads usually take.
+lte_online_minutes='10'
 
 [tailscale]
 # how often the tailscale/ssh watchdog checks connectivity, in minutes

@@ -125,6 +125,35 @@ sed -i "s|{{LTE_ON_CALENDAR}}|${LTE_ON_CALENDAR}|g" "${BASEDIR}/unit/lte_modem_o
 echo 'Configue lte_modem_on.timer.LTE_ON_BOOT_SEC = ' "$LTE_ON_BOOT_SEC"
 sed -i "s/{{LTE_ON_BOOT_SEC}}/${LTE_ON_BOOT_SEC}/g" "${BASEDIR}/unit/lte_modem_on.timer"
 
+# dynamic modify lte_modem_off.timer: fire a fixed lte_online_minutes after
+# lte_modem_on.timer, regardless of how long archive_and_clean.sh actually
+# takes - gives a predictable total online window every cycle (long enough
+# to ssh in) and guarantees the modem doesn't stay on forever if the upload
+# script ever hangs before reaching its own end.
+LTE_ONLINE_MINUTES=$(grep '^lte_online_minutes=' "$conf_file" | cut -d"'" -f2)
+# if undefined then keep the modem on for 10 minutes each cycle
+if [ -z "$LTE_ONLINE_MINUTES" ]; then LTE_ONLINE_MINUTES=10; fi
+
+LTE_OFF_OFFSET=$((LTE_ONLINE_MINUTES - LTE_ON_BEFORE))
+LTE_OFF_MINUTE_RAW=$((1 + LTE_OFF_OFFSET))
+LTE_OFF_MINUTE=$(( ((LTE_OFF_MINUTE_RAW % 60) + 60) % 60 ))
+LTE_OFF_HOUR_CARRY=$(( (LTE_OFF_MINUTE_RAW - LTE_OFF_MINUTE) / 60 ))
+LTE_OFF_HOUR_START=$(( ((LTE_OFF_HOUR_CARRY % LTE_ROTATE_TIME) + LTE_ROTATE_TIME) % LTE_ROTATE_TIME ))
+LTE_OFF_CALENDAR="*-*-* ${LTE_OFF_HOUR_START}/${LTE_ROTATE_TIME}:${LTE_OFF_MINUTE}:02"
+
+if [ "$LTE_ON_BOOT_MIN" -le 0 ]; then
+    LTE_OFF_BOOT_MIN=$LTE_ONLINE_MINUTES
+else
+    LTE_OFF_BOOT_MIN=$((LTE_ON_BOOT_MIN + LTE_ONLINE_MINUTES))
+fi
+LTE_OFF_BOOT_SEC="${LTE_OFF_BOOT_MIN}min"
+
+echo 'Configue lte_modem_off.timer.LTE_OFF_CALENDAR = ' "$LTE_OFF_CALENDAR"
+sed -i "s|{{LTE_OFF_CALENDAR}}|${LTE_OFF_CALENDAR}|g" "${BASEDIR}/unit/lte_modem_off.timer"
+
+echo 'Configue lte_modem_off.timer.LTE_OFF_BOOT_SEC = ' "$LTE_OFF_BOOT_SEC"
+sed -i "s/{{LTE_OFF_BOOT_SEC}}/${LTE_OFF_BOOT_SEC}/g" "${BASEDIR}/unit/lte_modem_off.timer"
+
 # dynamic modify tailscale_watchdog.timer
 TS_WATCHDOG_INTERVAL=$(grep '^tailscale_watchdog_interval=' "$conf_file" | cut -d"'" -f2)
 # if undefined then check every 5 minutes

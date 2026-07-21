@@ -165,15 +165,16 @@ fi
 
 rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_THERMAL"
 
-# ----------------- STEP 6: LTE MODEM POWER-SAVING -----------------
-# Switch the modem back to airplane mode now that all four sources have
-# uploaded. lte_modem_on.timer will wake it again ahead of the next window.
-# Skipped if tools/lte_hold.sh is currently active (SSH override).
-LTE_HOLD_FLAG="/tmp/rtkbase_lte_hold"
-if [ -f "$LTE_HOLD_FLAG" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - LTE hold active (${LTE_HOLD_FLAG}), leaving modem on."
-elif [ -n "${modem_at_port}" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done, switching LTE modem to airplane mode..."
+# ----------------- STEP 6: LTE MODEM POWER-SAVING (upload_window mode) -----------------
+# lte_modem_off.timer always turns the modem off at the fixed
+# lte_online_minutes deadline (see settings.conf [lte]) - that's the only
+# off-trigger in fixed_window mode, and a safety net here too in case this
+# script hangs before reaching this point. In upload_window mode, turn it
+# off right now instead of waiting for that deadline, since uploads are
+# already done - lte_off.sh already checks the hold flag and no-ops safely
+# if called again later by the timer.
+if [ "${lte_schedule_mode:-fixed_window}" = "upload_window" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done (upload_window mode), switching LTE modem off..."
     "${BASEDIR}/tools/lte_off.sh"
 fi
 

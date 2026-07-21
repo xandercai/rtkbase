@@ -1,0 +1,15 @@
+[Unit]
+Description=RTKBase - turn the LTE modem off at the end of its fixed online window
+
+[Timer]
+# covers the boot-triggered first online window
+OnBootSec={{LTE_OFF_BOOT_SEC}}
+# then lte_online_minutes after every lte_modem_on.timer trigger, same
+# wall-clock grid as rtkbase_archive.timer - independent of how long
+# archive_and_clean.sh itself takes to run
+OnCalendar={{LTE_OFF_CALENDAR}}
+AccuracySec=1us
+Unit=lte_modem_off.service
+
+[Install]
+WantedBy=timers.target

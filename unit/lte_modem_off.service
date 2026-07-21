@@ -1,0 +1,13 @@
+[Unit]
+Description=RTKBase - Turn LTE modem off (AT+CFUN=0), unless held
+After=network.target
+
+[Service]
+Type=oneshot
+User={user}
+ExecStart={script_path}/tools/lte_off.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
