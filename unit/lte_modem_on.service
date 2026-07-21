@@ -1,0 +1,13 @@
+[Unit]
+Description=RTKBase - Turn LTE modem on (AT+CFUN=1)
+After=network.target
+
+[Service]
+Type=oneshot
+User={user}
+ExecStart={script_path}/tools/lte_on.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

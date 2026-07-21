@@ -165,4 +165,16 @@ fi
 
 rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_THERMAL"
 
+# ----------------- STEP 6: LTE MODEM POWER-SAVING -----------------
+# Switch the modem back to airplane mode now that all four sources have
+# uploaded. lte_modem_on.timer will wake it again ahead of the next window.
+# Skipped if tools/lte_hold.sh is currently active (SSH override).
+LTE_HOLD_FLAG="/tmp/rtkbase_lte_hold"
+if [ -f "$LTE_HOLD_FLAG" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - LTE hold active (${LTE_HOLD_FLAG}), leaving modem on."
+elif [ -n "${modem_at_port}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done, switching LTE modem to airplane mode..."
+    "${BASEDIR}/tools/lte_off.sh"
+fi
+
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Batch job finished."

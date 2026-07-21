@@ -204,6 +204,17 @@ level=0
 [network]
 #lte modem port
 modem_at_port=''
+#lte modem AT port baudrate (115200 for the Waveshare SIM7600G-H HAT)
+modem_baudrate='115200'
+
+[lte]
+# Power-saving schedule: keep the LTE modem in airplane mode (AT+CFUN=0)
+# except around the upload window, when archive_and_clean.sh runs. The
+# lte_modem_on.timer wakes it this many minutes before the scheduled upload
+# so it has time to register on the network; archive_and_clean.sh switches
+# it back off right after all four sources finish uploading. Only takes
+# effect when modem_at_port above is set.
+lte_on_before_minutes='2'
 
 [tailscale]
 # how often the tailscale/ssh watchdog checks connectivity, in minutes

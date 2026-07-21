@@ -1,1 +1,13 @@
 SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1e0e", ENV{ID_MODEL_ID}=="9011", ATTRS{interface}=="Mobile AT Interface", ATTRS{bNumEndpoints}=="03", SYMLINK+="ttymodemAT", GROUP="dialout"
+
+# SIMCOM SIM7600G-H (e.g. Waveshare M.2 HAT): same idVendor/idProduct as the
+# A76XX above, but this module doesn't expose an ATTRS{interface} string, so
+# pick the AT port by its USB interface number instead. Confirmed via
+# udevadm on real hardware: ttyUSB0..4 = diag/NMEA/AT/PPP/audio, with the AT
+# port at bInterfaceNumber 04.
+# idVendor/idProduct live on the USB device node while bInterfaceNumber lives
+# on the USB interface (child) node, and udev requires every ATTRS{} in one
+# rule to match on the same node - so this needs two rules relaying through
+# an ENV tag, same trick as the Septentrio entry below.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9011", ENV{USB_TYPE}="1e0e:9011"
+ENV{USB_TYPE}=="1e0e:9011", SUBSYSTEM=="tty", ATTRS{bInterfaceNumber}=="04", SYMLINK+="ttymodemAT", GROUP="dialout"

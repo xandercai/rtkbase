@@ -88,6 +88,43 @@ sed -i "s|{{ROTATE_INTERVAL}}|${FILE_ROTATE_INTERVAL}|g" "${BASEDIR}/unit/rtkbas
 echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
 sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}min/g" "${BASEDIR}/unit/rtkbase_archive.timer"
 
+# dynamic modify lte_modem_on.timer: fire N minutes before every
+# rtkbase_archive.timer run, on the same wall-clock grid (built from the
+# same FILE_ROTATE_TIME), so the modem is registered on the network with
+# time to spare before archive_and_clean.sh needs to upload.
+LTE_ON_BEFORE=$(grep '^lte_on_before_minutes=' "$conf_file" | cut -d"'" -f2)
+# if undefined then wake the modem 2 minutes ahead of the upload window
+if [ -z "$LTE_ON_BEFORE" ]; then LTE_ON_BEFORE=2; fi
+
+LTE_ROTATE_TIME=$FILE_ROTATE_TIME
+[ "$LTE_ROTATE_TIME" -eq 0 ] && LTE_ROTATE_TIME=1
+
+LTE_ON_MINUTE=$((1 - LTE_ON_BEFORE))
+if [ "$LTE_ON_MINUTE" -lt 0 ]; then
+    LTE_ON_MINUTE=$((LTE_ON_MINUTE + 60))
+    LTE_HOUR_BORROW=1
+else
+    LTE_HOUR_BORROW=0
+fi
+LTE_ON_HOUR_START=$(( (LTE_ROTATE_TIME - LTE_HOUR_BORROW) % LTE_ROTATE_TIME ))
+LTE_ON_CALENDAR="*-*-* ${LTE_ON_HOUR_START}/${LTE_ROTATE_TIME}:${LTE_ON_MINUTE}:02"
+
+# Also cover the boot-triggered first run (rtkbase_archive.timer's own
+# OnBootSec): wake the modem a bit earlier than that so it's ready in time.
+LTE_ON_BOOT_MIN=$((INIT_TIME - LTE_ON_BEFORE))
+if [ "$LTE_ON_BOOT_MIN" -le 0 ]; then
+    LTE_ON_BOOT_SEC="10s"
+else
+    LTE_ON_BOOT_SEC="${LTE_ON_BOOT_MIN}min"
+fi
+
+echo 'Configue lte_modem_on.timer.LTE_ON_CALENDAR = ' "$LTE_ON_CALENDAR"
+# "/" appears in the calendar expression, so use "|" as the sed delimiter
+sed -i "s|{{LTE_ON_CALENDAR}}|${LTE_ON_CALENDAR}|g" "${BASEDIR}/unit/lte_modem_on.timer"
+
+echo 'Configue lte_modem_on.timer.LTE_ON_BOOT_SEC = ' "$LTE_ON_BOOT_SEC"
+sed -i "s/{{LTE_ON_BOOT_SEC}}/${LTE_ON_BOOT_SEC}/g" "${BASEDIR}/unit/lte_modem_on.timer"
+
 # dynamic modify tailscale_watchdog.timer
 TS_WATCHDOG_INTERVAL=$(grep '^tailscale_watchdog_interval=' "$conf_file" | cut -d"'" -f2)
 # if undefined then check every 5 minutes

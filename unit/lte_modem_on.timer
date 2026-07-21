@@ -1,0 +1,14 @@
+[Unit]
+Description=RTKBase - turn the LTE modem on ahead of the upload window
+
+[Timer]
+# covers the boot-triggered first archive run
+OnBootSec={{LTE_ON_BOOT_SEC}}
+# then N minutes before every scheduled upload, same wall-clock grid as
+# rtkbase_archive.timer
+OnCalendar={{LTE_ON_CALENDAR}}
+AccuracySec=1us
+Unit=lte_modem_on.service
+
+[Install]
+WantedBy=timers.target

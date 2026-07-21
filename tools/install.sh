@@ -812,6 +812,9 @@ start_services() {
   systemctl restart chrony.service
   systemctl enable --now rtkbase_archive.timer
   grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now modem_check.timer
+  # Power-saving LTE schedule: only relevant once modem_at_port is set (see
+  # tools/lte_hold.sh / lte_release.sh for the manual SSH override)
+  grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now lte_modem_on.timer
   grep -q "receiver='Septentrio_Mosaic-X5'" "${rtkbase_path}"/settings.conf && systemctl enable --now rtkbase_gnss_web_proxy.service
   # Enable Tailscale watchdog timer (checks every 5 minutes)
   if command -v tailscale &>/dev/null; then
