@@ -8,15 +8,32 @@ if [ "$HOME" = "/root" ]; then
 fi
 
 BASEDIR="$(dirname "$0")"
+HOSTNAME=$(hostname)
 
 # Load configuration variables
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
 
-GDRIVE_REMOTE="gdrive:GNSS_IR_Data"
-GDRIVE_LOG_REMOTE="gdrive:GNSS_IR_Data/logs"
+GDRIVE_GNSS_REMOTE="gdrive:GNSS_IR_Data"
+GDRIVE_JOURNAL_REMOTE="gdrive:GNSS_IR_JOURNAL"
+GDRIVE_MPPT_REMOTE="gdrive:GNSS_IR_MPPT"
+GDRIVE_THERMAL_REMOTE="gdrive:GNSS_IR_THERMAL"
 RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
 RCLONE_CONF_TMP="/tmp/rclone.conf"
-LOG_TMP="/tmp/rtkbase_journal_${HOSTNAME}.log"
+
+# Each upload source gets its own rclone log file. They must not be shared:
+# STEP 4 below greps a source's log to decide whether it's safe to delete the
+# local .ubx files, and a log shared across sources could show a success from
+# an unrelated upload (e.g. the journal) while the GNSS data upload actually
+# failed, causing source files to be deleted despite never having synced.
+RCLONE_LOG_GNSS="/tmp/rclone_upload_gnss.log"
+RCLONE_LOG_JOURNAL="/tmp/rclone_upload_journal.log"
+RCLONE_LOG_MPPT="/tmp/rclone_upload_mppt.log"
+RCLONE_LOG_THERMAL="/tmp/rclone_upload_thermal.log"
+
+JOURNAL_TMP="/tmp/rtkbase_journal_${HOSTNAME}.log"
+MPPT_TMP="/tmp/rtkbase_mppt_${HOSTNAME}.json"
+THERMAL_TMP="/tmp/rtkbase_thermal_${HOSTNAME}.json"
+TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
 
 # ============================================================
 # Main logic
@@ -32,13 +49,11 @@ if [ ! -f "$RCLONE_CONF_TMP" ]; then
     fi
 fi
 
-HOSTNAME=$(hostname)
-
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and compress new .ubx files in ${datadir} every ${file_rotate_time} hour..."
 
 cd "${datadir}" || exit 1
 
-# ----------------- STEP 1: COMPRESSION -----------------
+# ----------------- STEP 1: COMPRESSION (GNSS raw data) -----------------
 processed_files=()
 
 for file in *.ubx; do
@@ -56,22 +71,9 @@ for file in *.ubx; do
     fi
 done
 
-# ----------------- STEP 2: EXPORT SYSTEMD JOURNAL -----------------
-# Export the last file_rotate_time hours of journal to a temp file
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Exporting systemd journal (last ${file_rotate_time}h)..."
-journalctl --since "-${file_rotate_time}h" --no-pager --output=short-iso > "${LOG_TMP}" 2>/dev/null
-if [ $? -ne 0 ] || [ ! -s "${LOG_TMP}" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: journal export empty or failed, skipping log upload."
-    rm -f "${LOG_TMP}"
-fi
-
-# ----------------- STEP 3: UPLOAD -----------------
-RCLONE_LOG="/tmp/rclone_upload.log"
-
-# Upload .ubx archives if any were compressed
 if [ ${#processed_files[@]} -gt 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of GNSS data to Google Drive..."
-    rclone move "./" "${GDRIVE_REMOTE}" \
+    rclone move "./" "${GDRIVE_GNSS_REMOTE}" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --include "*.7z" \
@@ -79,28 +81,80 @@ if [ ${#processed_files[@]} -gt 0 ]; then
         --checkers 8 \
         --tpslimit 10 \
         --log-level INFO \
-        --log-file "$RCLONE_LOG"
+        --log-file "$RCLONE_LOG_GNSS"
 else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
 fi
 
-# Upload journal log if export succeeded
-if [ -f "${LOG_TMP}" ]; then
+# ----------------- STEP 2: SYSTEM JOURNAL (continuous log) -----------------
+# Export the journal covering the same window as the upload interval.
+# file_rotate_time=0 means "hourly" (see copy_unit.sh), so treat it like 1
+# here too, otherwise "--since -0h" would export next to nothing.
+journal_window="${file_rotate_time:-24}"
+[ "$journal_window" -eq 0 ] 2>/dev/null && journal_window=1
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Exporting systemd journal (last ${journal_window}h)..."
+journalctl --since "-${journal_window}h" --no-pager --output=short-iso > "${JOURNAL_TMP}" 2>/dev/null
+if [ $? -ne 0 ] || [ ! -s "${JOURNAL_TMP}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: journal export empty or failed, skipping log upload."
+    rm -f "${JOURNAL_TMP}"
+fi
+
+if [ -f "${JOURNAL_TMP}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading journal log to Google Drive..."
-    rclone copyto "${LOG_TMP}" "${GDRIVE_LOG_REMOTE}/$(date '+%Y-%m-%d_%H-%M-%S')_${HOSTNAME}_journal.log" \
+    rclone copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --log-level INFO \
-        --log-file "$RCLONE_LOG"
-    rm -f "${LOG_TMP}"
+        --log-file "$RCLONE_LOG_JOURNAL"
+    rm -f "${JOURNAL_TMP}"
 fi
 
-# ----------------- STEP 4: CLEANUP -----------------
+# ----------------- STEP 3: MPPT STATUS (point-in-time snapshot) -----------------
+# mppt_port is only set once install.sh --detect-mppt has paired the
+# RS485-USB adapter with a udev symlink. Empty means no MPPT hardware here.
+if [ -n "${mppt_port}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading MPPT status from ${mppt_port}..."
+    if "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/mppt_read.py" \
+        --port "${mppt_port}" --baudrate "${mppt_baudrate:-115200}" --slave-id "${mppt_slave_id:-1}" \
+        > "${MPPT_TMP}"
+    then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT snapshot to Google Drive..."
+        rclone copyto "${MPPT_TMP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt.json" \
+            --config "${RCLONE_CONF_TMP}" \
+            --no-update-modtime \
+            --log-level INFO \
+            --log-file "$RCLONE_LOG_MPPT"
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: MPPT read failed, skipping upload."
+    fi
+    rm -f "${MPPT_TMP}"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - MPPT not configured (mppt_port is empty), skipping."
+fi
+
+# ----------------- STEP 4: THERMAL SENSOR (point-in-time snapshot) -----------------
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
+if "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
+    rclone copyto "${THERMAL_TMP}" "${GDRIVE_THERMAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_thermal.json" \
+        --config "${RCLONE_CONF_TMP}" \
+        --no-update-modtime \
+        --log-level INFO \
+        --log-file "$RCLONE_LOG_THERMAL"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: thermal sensor read failed, skipping upload."
+fi
+rm -f "${THERMAL_TMP}"
+
+# ----------------- STEP 5: CLEANUP -----------------
+# Only the GNSS upload's own log decides whether local .ubx sources are safe
+# to delete - it must never be influenced by the other three sources.
 if [ ${#processed_files[@]} -gt 0 ]; then
     echo "Cleaning up local source .ubx files..."
     for file in "${processed_files[@]}"; do
         sevenz_name="${file%.*}_${HOSTNAME}.7z"
-        if [ ! -f "$sevenz_name" ] && grep -q -E "Moved|Copied" "$RCLONE_LOG" 2>/dev/null; then
+        if [ ! -f "$sevenz_name" ] && grep -q -E "Moved|Copied" "$RCLONE_LOG_GNSS" 2>/dev/null; then
             echo "Sync successfully, delete source file: $file"
             rm -f "$file"
         else
@@ -109,6 +163,6 @@ if [ ${#processed_files[@]} -gt 0 ]; then
     done
 fi
 
-rm -f "$RCLONE_LOG"
+rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_THERMAL"
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Batch job finished."

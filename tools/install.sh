@@ -75,6 +75,11 @@ man_help(){
     echo '        -m | --detect-modem'
     echo '                         Detect LTE/4G usb modem'
     echo ''
+    echo '        -p | --detect-mppt'
+    echo '                         Detect the EPEVER MPPT RS485-USB adapter and pin it to'
+    echo '                         /dev/epever485 via udev, so it never gets confused with'
+    echo '                         the LTE modem'\''s serial ports.'
+    echo ''
     echo '        -z | --zeroconf'
     echo '                         Install zeroconf/avahi service definition.'
     echo '                         It helps to detect the base station on the network.'
@@ -378,6 +383,28 @@ rtkbase_requirements(){
       then
         cp "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf"
       fi
+      # Configure 1-Wire for the optional DS18B20-class temperature sensor.
+      # Harmless no-op on boards where nothing is wired to the GPIO pin: the
+      # w1-therm driver just won't find any 28-* slave device on the bus.
+      THERMAL_GPIO_PIN=$(grep '^thermal_gpio_pin=' "${rtkbase_path}/settings.conf" | cut -d"'" -f2)
+      [ -z "$THERMAL_GPIO_PIN" ] && THERMAL_GPIO_PIN=7
+      if [ -f /boot/firmware/config.txt ]; then
+        CONFIG_TXT=/boot/firmware/config.txt
+      elif [ -f /boot/config.txt ]; then
+        CONFIG_TXT=/boot/config.txt
+      else
+        CONFIG_TXT=''
+      fi
+      if [ -n "$CONFIG_TXT" ]; then
+        if ! grep -qxF "dtoverlay=w1-gpio,gpiopin=${THERMAL_GPIO_PIN}" "$CONFIG_TXT"; then
+          echo "dtoverlay=w1-gpio,gpiopin=${THERMAL_GPIO_PIN}" >> "$CONFIG_TXT"
+          echo "Added 1-Wire overlay on GPIO${THERMAL_GPIO_PIN} to ${CONFIG_TXT} - a reboot is needed for it to take effect."
+        fi
+        grep -qxF 'w1-gpio' /etc/modules || echo 'w1-gpio' >> /etc/modules
+        grep -qxF 'w1-therm' /etc/modules || echo 'w1-therm' >> /etc/modules
+      else
+        echo 'Warning: no /boot/firmware/config.txt or /boot/config.txt found, skipping 1-Wire setup.'
+      fi
       #Then launch check cpu temp script for OPI zero LTS
       source "${rtkbase_path}/tools/opizero_temp_offset.sh"
       #venv module installation
@@ -405,6 +432,10 @@ install_unit_files() {
         systemctl daemon-reload
         #Add dialout group to user
         usermod -a -G dialout "${RTKBASE_USER}"
+        #Add systemd-journal group so archive_and_clean.sh (running as this
+        #user, not root) can read the full system journal, not just its own
+        #per-uid entries - otherwise the uploaded journal log is near-empty.
+        usermod -a -G systemd-journal "${RTKBASE_USER}"
       else
         echo 'RtkBase is not installed, use option --rtkbase-release or any other rtkbase installation option.'
       fi
@@ -709,6 +740,66 @@ _configure_modem(){
   "${rtkbase_path}"/tools/lte_network_mgmt.sh --lte_priority
 }
 
+detect_mppt() {
+  echo '################################'
+  echo 'EPEVER MPPT RS485 ADAPTER DETECTION'
+  echo '################################'
+  # Look for the WCH USB-RS485 chip (idVendor=1a86, idProduct=55d3) used by the
+  # EPEVER Tracer adapter, and grab its own USB serial number so a udev rule
+  # can pin it to a stable symlink. Without this, it could enumerate as the
+  # same /dev/ttyUSBx the LTE modem uses depending on plug/boot order.
+  local matches=0
+  detected_mppt_dev=''
+  detected_mppt_serial=''
+  for sysdevpath in $(find /sys/bus/usb/devices/usb*/ -name dev); do
+    ID_VENDOR_ID=''
+    ID_MODEL_ID=''
+    ID_SERIAL_SHORT=''
+    syspath="${sysdevpath%/dev}"
+    devname="$(udevadm info -q name -p "${syspath}")"
+    if [[ "$devname" == "bus/"* ]]; then continue; fi
+    eval "$(udevadm info -q property --export -p "${syspath}")"
+    if [[ "$ID_VENDOR_ID" == '1a86' ]] && [[ "$ID_MODEL_ID" == '55d3' ]]; then
+      detected_mppt_dev="$devname"
+      detected_mppt_serial="$ID_SERIAL_SHORT"
+      matches=$((matches + 1))
+    fi
+  done
+
+  if [[ $matches -eq 1 ]] && [[ -n "$detected_mppt_serial" ]]; then
+    echo "Found EPEVER RS485 adapter: /dev/${detected_mppt_dev} (serial ${detected_mppt_serial})"
+  elif [[ $matches -gt 1 ]]; then
+    echo "Error: found ${matches} devices matching idVendor=1a86/idProduct=55d3."
+    echo "Can't tell which one is the EPEVER adapter, unplug the others and retry."
+    return 1
+  else
+    echo 'No EPEVER RS485 adapter detected.'
+    return 1
+  fi
+
+  [[ ! -d /etc/udev/rules.d ]] && mkdir /etc/udev/rules.d/
+  cat > /etc/udev/rules.d/92-epever.rules <<EOF
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", ATTRS{serial}=="${detected_mppt_serial}", SYMLINK+="epever485", GROUP="dialout"
+EOF
+  udevadm control --reload && udevadm trigger
+  echo 'Created /etc/udev/rules.d/92-epever.rules -> /dev/epever485'
+}
+
+_add_mppt_config(){
+  if [[ -f "${rtkbase_path}/settings.conf" ]] && grep -qE "^mppt_port=.*" "${rtkbase_path}"/settings.conf
+  then
+    sudo -u "${RTKBASE_USER}" sed -i "s|^mppt_port=.*|mppt_port='/dev/epever485'|" "${rtkbase_path}"/settings.conf
+  elif [[ -f "${rtkbase_path}/settings.conf" ]] && ! grep -qE "^mppt_port=.*" "${rtkbase_path}"/settings.conf
+  then
+    printf "[mppt]\nmppt_port='/dev/epever485'\n" | sudo tee -a "${rtkbase_path}"/settings.conf > /dev/null
+  elif [[ ! -f "${rtkbase_path}/settings.conf" ]]
+  then
+    echo 'settings.conf is missing'
+    return 1
+  fi
+  echo 'mppt_port set to /dev/epever485 in settings.conf'
+}
+
 start_services() {
   echo '################################'
   echo 'STARTING SERVICES'
@@ -731,9 +822,10 @@ start_services() {
   echo '################################'
   echo 'END OF INSTALLATION'
   echo 'You can open your browser to http://'"$(hostname -I)"
-  #If the user isn't already in dialout group, a reboot is 
-  #mandatory to be able to access /dev/tty*
+  #If the user isn't already in dialout/systemd-journal group, a reboot is
+  #mandatory to be able to access /dev/tty* and the full system journal
   groups "${RTKBASE_USER}" | grep -q "dialout" || echo "But first, Please REBOOT!!!"
+  groups "${RTKBASE_USER}" | grep -q "systemd-journal" || echo "But first, Please REBOOT!!! (needed for journal upload)"
   echo '################################'
 }
 
@@ -792,11 +884,12 @@ main() {
   ARG_NO_WRITE_PORT=0
   ARG_CONFIGURE_GNSS=0
   ARG_DETECT_MODEM=0
+  ARG_DETECT_MPPT=0
   ARG_START_SERVICES=0
   ARG_ZEROCONF=0
   ARG_ALL=0
 
-  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jf:qtgencmsza: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,start-services,zeroconf,all: -- "$@")
+  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jf:qtgencmpsza: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,detect-mppt,start-services,zeroconf,all: -- "$@")
   VALID_ARGUMENTS=$?
   if [ "$VALID_ARGUMENTS" != "0" ]; then
     #man_help
@@ -824,6 +917,7 @@ main() {
         -n | --no-write-port) ARG_NO_WRITE_PORT=1      ; shift   ;;
         -c | --configure-gnss) ARG_CONFIGURE_GNSS=1    ; shift   ;;
         -m | --detect-modem) ARG_DETECT_MODEM=1        ; shift   ;;
+        -p | --detect-mppt) ARG_DETECT_MPPT=1           ; shift   ;;
         -s | --start-services) ARG_START_SERVICES=1    ; shift   ;;
         -z | --zeroconf) ARG_ZEROCONF=1                ; shift   ;;
         -a | --all) ARG_ALL="${2}"                     ; shift 2 ;;
@@ -887,6 +981,7 @@ main() {
   [ $ARG_DETECT_GNSS -eq 1 ] &&  { detect_gnss "${ARG_NO_WRITE_PORT}" ; ((cumulative_exit+=$?)) ;}
   [ $ARG_CONFIGURE_GNSS -eq 1 ] && { configure_gnss ; ((cumulative_exit+=$?)) ;}
   [ $ARG_DETECT_MODEM -eq 1 ] && { detect_usb_modem && _add_modem_port && _configure_modem ; ((cumulative_exit+=$?)) ;}
+  [ $ARG_DETECT_MPPT -eq 1 ] && { detect_mppt && _add_mppt_config ; ((cumulative_exit+=$?)) ;}
   [ $ARG_ZEROCONF -eq 1 ] && { install_zeroconf_service; ((cumulative_exit+=$?)) ;}
   [ $ARG_START_SERVICES -eq 1 ] && { start_services ; ((cumulative_exit+=$?)) ;}
 }

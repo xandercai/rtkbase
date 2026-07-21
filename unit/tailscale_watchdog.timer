@@ -2,9 +2,12 @@
 Description=Tailscale & SSH watchdog timer
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+# first check shortly after boot, without waiting for the next calendar tick
+OnBootSec={{TS_WATCHDOG_BOOT_DELAY}}
+# then on a fixed wall-clock grid, same convention as rtkbase_archive.timer
+OnCalendar={{TS_WATCHDOG_INTERVAL}}
 AccuracySec=30s
+Unit=tailscale_watchdog.service
 
 [Install]
 WantedBy=timers.target

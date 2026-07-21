@@ -204,3 +204,24 @@ level=0
 [network]
 #lte modem port
 modem_at_port=''
+
+[tailscale]
+# how often the tailscale/ssh watchdog checks connectivity, in minutes
+tailscale_watchdog_interval='5'
+# delay after boot before the first watchdog check, in minutes
+tailscale_watchdog_boot_delay='2'
+
+[mppt]
+# EPEVER Tracer RS485-USB adapter. Left empty means "no MPPT hardware
+# configured" and archive_and_clean.sh will skip the mppt upload step.
+# Run install.sh --detect-mppt with the adapter plugged in to fill this in:
+# it creates a udev rule pinning the adapter's own USB serial number to
+# /dev/epever485 so it can never be confused with the LTE modem's ports.
+mppt_port=''
+mppt_baudrate='115200'
+mppt_slave_id='1'
+
+[thermal]
+# GPIO pin (BCM numbering) wired to the 1-Wire (DS18B20-class) temperature
+# sensor. install.sh configures the matching w1-gpio dtoverlay automatically.
+thermal_gpio_pin='7'

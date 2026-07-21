@@ -87,6 +87,32 @@ sed -i "s|{{ROTATE_INTERVAL}}|${FILE_ROTATE_INTERVAL}|g" "${BASEDIR}/unit/rtkbas
 
 echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
 sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}min/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+
+# dynamic modify tailscale_watchdog.timer
+TS_WATCHDOG_INTERVAL=$(grep '^tailscale_watchdog_interval=' "$conf_file" | cut -d"'" -f2)
+# if undefined then check every 5 minutes
+if [ -z "$TS_WATCHDOG_INTERVAL" ]; then TS_WATCHDOG_INTERVAL=5; fi
+
+# build an OnCalendar expression (same convention as rtkbase_archive.timer) so
+# every unit wakes on the same wall-clock grid instead of drifting relative to
+# its own boot time. Relies on the LTE modem keeping the system clock synced.
+if [ "$TS_WATCHDOG_INTERVAL" -ge 60 ]; then
+    TS_WATCHDOG_HOURS=$((TS_WATCHDOG_INTERVAL / 60))
+    TS_WATCHDOG_CALENDAR="*-*-* 0/${TS_WATCHDOG_HOURS}:00:00"
+else
+    TS_WATCHDOG_CALENDAR="*-*-* *:0/${TS_WATCHDOG_INTERVAL}:00"
+fi
+
+TS_WATCHDOG_BOOT_DELAY=$(grep '^tailscale_watchdog_boot_delay=' "$conf_file" | cut -d"'" -f2)
+# if undefined then wait 2 minutes after boot before the first check
+if [ -z "$TS_WATCHDOG_BOOT_DELAY" ]; then TS_WATCHDOG_BOOT_DELAY=2; fi
+
+echo 'Configue tailscale_watchdog.timer.TS_WATCHDOG_INTERVAL = ' "$TS_WATCHDOG_CALENDAR"
+# "/" appears in the calendar expression, so use "|" as the sed delimiter
+sed -i "s|{{TS_WATCHDOG_INTERVAL}}|${TS_WATCHDOG_CALENDAR}|g" "${BASEDIR}/unit/tailscale_watchdog.timer"
+
+echo 'Configue tailscale_watchdog.timer.TS_WATCHDOG_BOOT_DELAY = ' "${TS_WATCHDOG_BOOT_DELAY}min"
+sed -i "s/{{TS_WATCHDOG_BOOT_DELAY}}/${TS_WATCHDOG_BOOT_DELAY}min/g" "${BASEDIR}/unit/tailscale_watchdog.timer"
 # <-xcai
 
 
