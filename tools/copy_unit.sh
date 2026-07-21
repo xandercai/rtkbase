@@ -154,6 +154,30 @@ sed -i "s|{{LTE_OFF_CALENDAR}}|${LTE_OFF_CALENDAR}|g" "${BASEDIR}/unit/lte_modem
 echo 'Configue lte_modem_off.timer.LTE_OFF_BOOT_SEC = ' "$LTE_OFF_BOOT_SEC"
 sed -i "s/{{LTE_OFF_BOOT_SEC}}/${LTE_OFF_BOOT_SEC}/g" "${BASEDIR}/unit/lte_modem_off.timer"
 
+# dynamic modify mppt_charge_guard.timer
+MPPT_GUARD_CHECK=$(grep '^mppt_charge_check_minutes=' "$conf_file" | cut -d"'" -f2)
+# if undefined then check every 20 minutes
+if [ -z "$MPPT_GUARD_CHECK" ]; then MPPT_GUARD_CHECK=20; fi
+
+# same convention as tailscale_watchdog.timer: minute-step below an hour,
+# hour-step at or above one
+if [ "$MPPT_GUARD_CHECK" -ge 60 ]; then
+    MPPT_GUARD_HOURS=$((MPPT_GUARD_CHECK / 60))
+    MPPT_GUARD_CALENDAR="*-*-* 0/${MPPT_GUARD_HOURS}:00:00"
+else
+    MPPT_GUARD_CALENDAR="*-*-* *:0/${MPPT_GUARD_CHECK}:00"
+fi
+
+MPPT_GUARD_BOOT_DELAY=$(grep '^mppt_charge_guard_boot_delay=' "$conf_file" | cut -d"'" -f2)
+# if undefined then wait 2 minutes after boot before the first check
+if [ -z "$MPPT_GUARD_BOOT_DELAY" ]; then MPPT_GUARD_BOOT_DELAY=2; fi
+
+echo 'Configue mppt_charge_guard.timer.MPPT_GUARD_CALENDAR = ' "$MPPT_GUARD_CALENDAR"
+sed -i "s|{{MPPT_GUARD_CALENDAR}}|${MPPT_GUARD_CALENDAR}|g" "${BASEDIR}/unit/mppt_charge_guard.timer"
+
+echo 'Configue mppt_charge_guard.timer.MPPT_GUARD_BOOT_DELAY = ' "${MPPT_GUARD_BOOT_DELAY}min"
+sed -i "s/{{MPPT_GUARD_BOOT_DELAY}}/${MPPT_GUARD_BOOT_DELAY}min/g" "${BASEDIR}/unit/mppt_charge_guard.timer"
+
 # dynamic modify tailscale_watchdog.timer
 TS_WATCHDOG_INTERVAL=$(grep '^tailscale_watchdog_interval=' "$conf_file" | cut -d"'" -f2)
 # if undefined then check every 5 minutes

@@ -1,0 +1,11 @@
+[Unit]
+Description=RTKBase - periodic low-temperature MPPT charge guard
+
+[Timer]
+OnBootSec={{MPPT_GUARD_BOOT_DELAY}}
+OnCalendar={{MPPT_GUARD_CALENDAR}}
+AccuracySec=30s
+Unit=mppt_charge_guard.service
+
+[Install]
+WantedBy=timers.target

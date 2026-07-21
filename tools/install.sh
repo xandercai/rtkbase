@@ -831,6 +831,8 @@ start_services() {
   # tools/lte_hold.sh / lte_release.sh for the manual SSH override)
   grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now lte_modem_on.timer
   grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now lte_modem_off.timer
+  # Low-temperature MPPT charge guard: only relevant once mppt_port is set
+  grep -qE "^mppt_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now mppt_charge_guard.timer
   grep -q "receiver='Septentrio_Mosaic-X5'" "${rtkbase_path}"/settings.conf && systemctl enable --now rtkbase_gnss_web_proxy.service
   # Enable Tailscale watchdog timer (checks every 5 minutes)
   if command -v tailscale &>/dev/null; then

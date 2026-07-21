@@ -1,0 +1,13 @@
+[Unit]
+Description=RTKBase - MPPT charge guard (disable charging below threshold temperature)
+After=network.target
+
+[Service]
+Type=oneshot
+User={user}
+ExecStart=/bin/bash {script_path}/tools/mppt_charge_guard.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
