@@ -376,6 +376,7 @@ rtkbase_requirements(){
       [[ ! -d /etc/udev/rules.d ]] && mkdir /etc/udev/rules.d/
       cp "${rtkbase_path}"/tools/udev_rules/*.rules /etc/udev/rules.d/
       udevadm control --reload && udevadm trigger
+      udevadm settle
       # Copying polkitd rules and add rtkbase group
       "${rtkbase_path}"/tools/install_polkit_rules.sh "${RTKBASE_USER}"
       #Copying settings.conf.default as settings.conf
@@ -383,11 +384,22 @@ rtkbase_requirements(){
       then
         cp "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf"
       fi
+      # Auto-detect the SIMCOM AT port. 90-usb-simcom-at.rules gives both the
+      # A76XX and the SIM7600G-H the same stable /dev/ttymodemAT symlink, so
+      # unlike GNSS/MPPT detection this doesn't need a separate --detect-modem
+      # step or chip-specific matching: if the symlink exists, some SIMCOM
+      # modem is plugged in, and LTE power-saving (fixed_window by default,
+      # see settings.conf [lte]) can work right after install instead of
+      # needing modem_at_port set by hand.
+      if [ -e /dev/ttymodemAT ] && grep -qE "^modem_at_port=''" "${rtkbase_path}/settings.conf"; then
+        sudo -u "${RTKBASE_USER}" sed -i "s|^modem_at_port=.*|modem_at_port='/dev/ttymodemAT'|" "${rtkbase_path}/settings.conf"
+        echo "Detected SIMCOM AT port -> modem_at_port set to /dev/ttymodemAT in settings.conf"
+      fi
       # Configure 1-Wire for the optional DS18B20-class temperature sensor.
       # Harmless no-op on boards where nothing is wired to the GPIO pin: the
       # w1-therm driver just won't find any 28-* slave device on the bus.
       THERMAL_GPIO_PIN=$(grep '^thermal_gpio_pin=' "${rtkbase_path}/settings.conf" | cut -d"'" -f2)
-      [ -z "$THERMAL_GPIO_PIN" ] && THERMAL_GPIO_PIN=7
+      [ -z "$THERMAL_GPIO_PIN" ] && THERMAL_GPIO_PIN=4
       if [ -f /boot/firmware/config.txt ]; then
         CONFIG_TXT=/boot/firmware/config.txt
       elif [ -f /boot/config.txt ]; then
@@ -397,11 +409,14 @@ rtkbase_requirements(){
       fi
       if [ -n "$CONFIG_TXT" ]; then
         if ! grep -qxF "dtoverlay=w1-gpio,gpiopin=${THERMAL_GPIO_PIN}" "$CONFIG_TXT"; then
-          echo "dtoverlay=w1-gpio,gpiopin=${THERMAL_GPIO_PIN}" >> "$CONFIG_TXT"
+          # Leading newline guards against config.txt's last existing line
+          # not ending in one - a bare ">> file" append would otherwise glue
+          # this onto the end of that line and silently corrupt both.
+          printf '\ndtoverlay=w1-gpio,gpiopin=%s\n' "${THERMAL_GPIO_PIN}" >> "$CONFIG_TXT"
           echo "Added 1-Wire overlay on GPIO${THERMAL_GPIO_PIN} to ${CONFIG_TXT} - a reboot is needed for it to take effect."
         fi
-        grep -qxF 'w1-gpio' /etc/modules || echo 'w1-gpio' >> /etc/modules
-        grep -qxF 'w1-therm' /etc/modules || echo 'w1-therm' >> /etc/modules
+        grep -qxF 'w1-gpio' /etc/modules || printf '\nw1-gpio\n' >> /etc/modules
+        grep -qxF 'w1-therm' /etc/modules || printf '\nw1-therm\n' >> /etc/modules
       else
         echo 'Warning: no /boot/firmware/config.txt or /boot/config.txt found, skipping 1-Wire setup.'
       fi
