@@ -15,3 +15,19 @@ polkit.addRule(function(action, subject) {
          return polkit.Result.YES;
        }
     });
+
+// lte_on.sh/lte_off.sh (run as the rtkbase user, not root) start/stop these
+// two units when the LTE radio goes into/out of airplane mode. Without this
+// rule, that systemctl call needs interactive polkit auth, which works when
+// a human runs the script by hand over SSH but silently fails when the
+// lte_modem_on.timer/lte_modem_off.timer fire unattended (no session to
+// prompt).
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+       (action.lookup("unit") == "tailscaled.service" ||
+        action.lookup("unit") == "tailscale_watchdog.timer") &&
+       subject.isInGroup("rtkbase"))
+       {
+         return polkit.Result.YES;
+       }
+    });
