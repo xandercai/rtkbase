@@ -833,7 +833,13 @@ start_services() {
   systemctl restart gpsd.service
   systemctl restart chrony.service
   systemctl enable --now rtkbase_archive.timer
-  grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now modem_check.timer
+  # modem_check.timer/service is intentionally not enabled here: it predates
+  # the scheduled LTE power-saving windows below and its "network looks dead,
+  # cycle CFUN to recover" fallback would fight the deliberate airplane-mode
+  # windows (it can't tell "radio off on purpose" from "radio stuck"). It
+  # also depends on the same broken sim_modem handshake that lte_at.py was
+  # written to route around, so it never actually completes anyway - see
+  # tools/modem_check.py.
   # Power-saving LTE schedule: only relevant once modem_at_port is set (see
   # tools/lte_hold.sh / lte_release.sh for the manual SSH override)
   grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now lte_modem_on.timer
