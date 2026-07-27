@@ -21,3 +21,12 @@ fi
 
 "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" \
     --port "${modem_at_port}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=0"
+
+# No radio during airplane mode, so there's nothing for Tailscale to connect
+# over. Stop tailscaled itself (kills its background DERP/netcheck retry
+# loop) and the watchdog that would otherwise try to bring it back up every
+# cycle. lte_on.sh restarts both when the modem comes back on.
+if command -v tailscale &>/dev/null; then
+    systemctl stop tailscale_watchdog.timer 2>/dev/null
+    systemctl stop tailscaled 2>/dev/null
+fi

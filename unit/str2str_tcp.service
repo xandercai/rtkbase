@@ -3,6 +3,16 @@ Description=RTKBase Tcp
 #After=network-online.target
 #Wants=network-online.target
 #Requires=network-online.target
+# Tie this service's lifecycle to the GNSS device node itself: str2str's own
+# serial reconnect logic doesn't reliably recover from a USB replug (it can
+# get stuck printing "waiting..." forever without ever exiting, which means
+# Restart=on-failure below never fires). BindsTo+After makes systemd stop
+# this unit the moment /dev/ttyGNSS disappears, and the SYSTEMD_WANTS
+# property set on that device in 91-gnss.rules starts it fresh again the
+# moment the device reappears (possibly under a new /dev/ttyACM*).
+BindsTo=dev-ttyGNSS.device
+After=dev-ttyGNSS.device
+Wants=str2str_file.service
 
 [Service]
 Type=simple

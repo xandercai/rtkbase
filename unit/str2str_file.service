@@ -1,6 +1,11 @@
 [Unit]
 Description=RTKBase File - Log data
-Requires=str2str_tcp.service
+# BindsTo (not just Requires) so this also stops whenever str2str_tcp.service
+# stops or restarts - e.g. when the GNSS device gets replugged and
+# str2str_tcp.service is bound-restarted by dev-ttyGNSS.device (see that
+# unit's comment). Otherwise this would keep its stale TCP connection open
+# and never notice the input side came back.
+BindsTo=str2str_tcp.service
 After=str2str_tcp.service
 
 [Service]
