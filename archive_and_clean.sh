@@ -94,7 +94,14 @@ journal_window="${file_rotate_time:-24}"
 [ "$journal_window" -eq 0 ] 2>/dev/null && journal_window=1
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Exporting systemd journal (last ${journal_window}h)..."
-journalctl --since "-${journal_window}h" --no-pager --output=short-iso > "${JOURNAL_TMP}" 2>/dev/null
+# --output=json (one JSON object per line) instead of plain short-iso text:
+# this keeps each entry's PRIORITY field, which is how rtkdashboard flags
+# genuinely unexpected problems (anything at warning level or worse) instead
+# of only ones matching a hand-maintained keyword list. Anything a unit
+# writes to stderr is auto-tagged PRIORITY=err by systemd's own
+# StandardError=journal handling, so this catches new failure modes with no
+# extra code on the writing side, as long as it goes to stderr like normal.
+journalctl --since "-${journal_window}h" --no-pager --output=json > "${JOURNAL_TMP}" 2>/dev/null
 if [ $? -ne 0 ] || [ ! -s "${JOURNAL_TMP}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: journal export empty or failed, skipping log upload."
     rm -f "${JOURNAL_TMP}"
