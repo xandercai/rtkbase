@@ -4,6 +4,10 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# The systemd default (90s) can be blown by a slow/large journal export
+# (STEP 4 of archive_and_clean.sh) on a busy box, which would otherwise get
+# the whole script killed mid-run regardless of step order.
+TimeoutStartSec=10min
 User={user}
 # ExecStartPre=+/bin/bash {script_path}/update_timer.sh
 # ExecStartPre=/bin/sleep 120

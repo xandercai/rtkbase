@@ -21,7 +21,7 @@ RCLONE_CONF="$HOME/.config/rclone/rclone.conf"
 RCLONE_CONF_TMP="/tmp/rclone.conf"
 
 # Each upload source gets its own rclone log file. They must not be shared:
-# STEP 4 below greps a source's log to decide whether it's safe to delete the
+# STEP 5 below greps a source's log to decide whether it's safe to delete the
 # local .ubx files, and a log shared across sources could show a success from
 # an unrelated upload (e.g. the journal) while the GNSS data upload actually
 # failed, causing source files to be deleted despite never having synced.
@@ -86,38 +86,7 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
 fi
 
-# ----------------- STEP 2: SYSTEM JOURNAL (continuous log) -----------------
-# Export the journal covering the same window as the upload interval.
-# file_rotate_time=0 means "hourly" (see copy_unit.sh), so treat it like 1
-# here too, otherwise "--since -0h" would export next to nothing.
-journal_window="${file_rotate_time:-24}"
-[ "$journal_window" -eq 0 ] 2>/dev/null && journal_window=1
-
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Exporting systemd journal (last ${journal_window}h)..."
-# --output=json (one JSON object per line) instead of plain short-iso text:
-# this keeps each entry's PRIORITY field, which is how rtkdashboard flags
-# genuinely unexpected problems (anything at warning level or worse) instead
-# of only ones matching a hand-maintained keyword list. Anything a unit
-# writes to stderr is auto-tagged PRIORITY=err by systemd's own
-# StandardError=journal handling, so this catches new failure modes with no
-# extra code on the writing side, as long as it goes to stderr like normal.
-journalctl --since "-${journal_window}h" --no-pager --output=json > "${JOURNAL_TMP}" 2>/dev/null
-if [ $? -ne 0 ] || [ ! -s "${JOURNAL_TMP}" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: journal export empty or failed, skipping log upload."
-    rm -f "${JOURNAL_TMP}"
-fi
-
-if [ -f "${JOURNAL_TMP}" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading journal log to Google Drive..."
-    rclone copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
-        --config "${RCLONE_CONF_TMP}" \
-        --no-update-modtime \
-        --log-level INFO \
-        --log-file "$RCLONE_LOG_JOURNAL"
-    rm -f "${JOURNAL_TMP}"
-fi
-
-# ----------------- STEP 3: MPPT STATUS (point-in-time snapshot) -----------------
+# ----------------- STEP 2: MPPT STATUS (point-in-time snapshot) -----------------
 # mppt_port is only set once install.sh --detect-mppt has paired the
 # RS485-USB adapter with a udev symlink. Empty means no MPPT hardware here.
 if [ -n "${mppt_port}" ]; then
@@ -140,7 +109,7 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - MPPT not configured (mppt_port is empty), skipping."
 fi
 
-# ----------------- STEP 4: THERMAL SENSOR (point-in-time snapshot) -----------------
+# ----------------- STEP 3: THERMAL SENSOR (point-in-time snapshot) -----------------
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
 if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
@@ -153,6 +122,46 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: thermal sensor read failed, skipping upload."
 fi
 rm -f "${THERMAL_TMP}"
+
+# ----------------- STEP 4: SYSTEM JOURNAL (continuous log) -----------------
+# Exported last, after STEP 2/3 have already run and logged their own
+# success/failure - so this same run's journal upload is a self-contained
+# record of what happened, instead of only showing up in the *next* run's
+# journal export two hours later.
+# file_rotate_time=0 means "hourly" (see copy_unit.sh), so treat it like 1
+# here too, otherwise "--since -0h" would export next to nothing.
+journal_window="${file_rotate_time:-24}"
+[ "$journal_window" -eq 0 ] 2>/dev/null && journal_window=1
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Exporting systemd journal (last ${journal_window}h)..."
+# --output=json (one JSON object per line) instead of plain short-iso text:
+# this keeps each entry's PRIORITY field, which is how rtkdashboard flags
+# genuinely unexpected problems (anything at warning level or worse) instead
+# of only ones matching a hand-maintained keyword list. Anything a unit
+# writes to stderr is auto-tagged PRIORITY=err by systemd's own
+# StandardError=journal handling, so this catches new failure modes with no
+# extra code on the writing side, as long as it goes to stderr like normal.
+# --output-fields restricts each entry to only what parsers.py actually
+# reads (see _alert_from_json_line) - journalctl's full json record has
+# several dozen _-prefixed fields we never use, and cutting them out keeps
+# this export fast even over a multi-hour window on a busy box.
+journalctl --since "-${journal_window}h" --no-pager --output=json \
+    --output-fields=MESSAGE,PRIORITY,SYSLOG_IDENTIFIER,_COMM,__REALTIME_TIMESTAMP \
+    > "${JOURNAL_TMP}" 2>/dev/null
+if [ $? -ne 0 ] || [ ! -s "${JOURNAL_TMP}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: journal export empty or failed, skipping log upload."
+    rm -f "${JOURNAL_TMP}"
+fi
+
+if [ -f "${JOURNAL_TMP}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading journal log to Google Drive..."
+    rclone copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
+        --config "${RCLONE_CONF_TMP}" \
+        --no-update-modtime \
+        --log-level INFO \
+        --log-file "$RCLONE_LOG_JOURNAL"
+    rm -f "${JOURNAL_TMP}"
+fi
 
 # ----------------- STEP 5: CLEANUP -----------------
 # Only the GNSS upload's own log decides whether local .ubx sources are safe
