@@ -109,6 +109,24 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - MPPT not configured (mppt_port is empty), skipping."
 fi
 
+# ----------------- STEP 2b: MPPT LOAD POWER SAMPLES (1-min series) -----------------
+# mppt_power_sample.timer appends one load-power reading per minute to this
+# tmpfs CSV. Upload the window's accumulation and rotate: mv first so the
+# sampler immediately starts a fresh file and no sample written mid-upload
+# is lost. Independent of the STEP 2 snapshot - uploads even if that failed.
+POWER_SAMPLES="/tmp/rtkbase_mppt_power_${HOSTNAME}.csv"
+if [ -s "${POWER_SAMPLES}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT load power samples..."
+    POWER_SAMPLES_SNAP="${POWER_SAMPLES}.uploading"
+    mv "${POWER_SAMPLES}" "${POWER_SAMPLES_SNAP}"
+    rclone copyto "${POWER_SAMPLES_SNAP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt_power.csv" \
+        --config "${RCLONE_CONF_TMP}" \
+        --no-update-modtime \
+        --log-level INFO \
+        --log-file "$RCLONE_LOG_MPPT"
+    rm -f "${POWER_SAMPLES_SNAP}"
+fi
+
 # ----------------- STEP 3: THERMAL SENSOR (point-in-time snapshot) -----------------
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
 if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then

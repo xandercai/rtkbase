@@ -1,0 +1,9 @@
+[Unit]
+Description=RTKBase - Sample MPPT load power (1-min series for the dashboard)
+
+[Service]
+Type=oneshot
+User={user}
+ExecStart=/bin/bash {script_path}/tools/mppt_power_sample.sh
+StandardOutput=journal
+StandardError=journal

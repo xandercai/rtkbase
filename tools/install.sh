@@ -820,6 +820,7 @@ _add_mppt_config(){
   # it once mppt_port finally is set. Do it here instead.
   systemctl daemon-reload
   systemctl enable --now mppt_charge_guard.timer
+  systemctl enable --now mppt_power_sample.timer
 }
 
 start_services() {
@@ -846,6 +847,8 @@ start_services() {
   grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now lte_modem_off.timer
   # Low-temperature MPPT charge guard: only relevant once mppt_port is set
   grep -qE "^mppt_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now mppt_charge_guard.timer
+  # 1-minute load power sampler feeding the dashboard's avg/min/max series
+  grep -qE "^mppt_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now mppt_power_sample.timer
   grep -q "receiver='Septentrio_Mosaic-X5'" "${rtkbase_path}"/settings.conf && systemctl enable --now rtkbase_gnss_web_proxy.service
   # Enable Tailscale watchdog timer (checks every 5 minutes)
   if command -v tailscale &>/dev/null; then

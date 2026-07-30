@@ -1,0 +1,13 @@
+[Unit]
+Description=RTKBase - MPPT load power sampling timer (every minute at :30)
+
+[Timer]
+# Second :30 keeps this off the :00/:02 grid used by mppt_charge_guard and
+# rtkbase_archive, so nothing else ever has the RS485 port open at the same
+# moment. AccuracySec must stay tight or systemd's default 1-minute window
+# would smear firings right back onto that grid.
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
