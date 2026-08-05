@@ -80,6 +80,8 @@ if [ ${#processed_files[@]} -gt 0 ]; then
         --transfers 4 \
         --checkers 8 \
         --tpslimit 10 \
+        --timeout 60s \
+        --contimeout 30s \
         --log-level INFO \
         --log-file "$RCLONE_LOG_GNSS"
 else
@@ -99,6 +101,8 @@ if [ -n "${mppt_port}" ]; then
         rclone copyto "${MPPT_TMP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt.json" \
             --config "${RCLONE_CONF_TMP}" \
             --no-update-modtime \
+            --timeout 60s \
+            --contimeout 30s \
             --log-level INFO \
             --log-file "$RCLONE_LOG_MPPT"
     else
@@ -122,6 +126,8 @@ if [ -s "${POWER_SAMPLES}" ]; then
     rclone copyto "${POWER_SAMPLES_SNAP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt_power.csv" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
+        --timeout 60s \
+        --contimeout 30s \
         --log-level INFO \
         --log-file "$RCLONE_LOG_MPPT"
     rm -f "${POWER_SAMPLES_SNAP}"
@@ -134,6 +140,8 @@ if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
     rclone copyto "${THERMAL_TMP}" "${GDRIVE_THERMAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_thermal.json" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
+        --timeout 60s \
+        --contimeout 30s \
         --log-level INFO \
         --log-file "$RCLONE_LOG_THERMAL"
 else
@@ -176,6 +184,8 @@ if [ -f "${JOURNAL_TMP}" ]; then
     rclone copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
+        --timeout 60s \
+        --contimeout 30s \
         --log-level INFO \
         --log-file "$RCLONE_LOG_JOURNAL"
     rm -f "${JOURNAL_TMP}"
