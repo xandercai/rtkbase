@@ -104,6 +104,15 @@ mkdir -p ${logdir}
     then
       mkdir -p ${datadir}
       ${cast} -in ${!1} -out ${out_file} -t ${level} -fl ${logdir}/str2str_file.log
+    else
+      # check_timesync.sh timed out (see that script) - str2str never
+      # started. Exiting non-zero here (rather than just falling through
+      # to a clean exit) is what lets str2str_file.service's
+      # Restart=on-failure/RestartSec=30 actually retry this instead of
+      # systemd seeing a normally-exited, do-nothing run and leaving it
+      # at that.
+      echo "run_cast.sh: check_timesync.sh failed (exit ${ret}), not starting str2str" >&2
+      exit 1
     fi
     ;;
 
