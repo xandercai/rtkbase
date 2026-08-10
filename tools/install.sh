@@ -171,6 +171,13 @@ install_gpsd_chrony() {
       #Overriding chrony.service with custom dependency
       cp /lib/systemd/system/chrony.service /etc/systemd/system/chrony.service
       sed -i s/^After=.*/After=gpsd.service/ /etc/systemd/system/chrony.service
+      #Add restart condition: on this boot ordering (chrony after gpsd after
+      #str2str_tcp), chrony.service's control process can fail right at boot
+      #before its dependencies are fully settled. The stock unit has no
+      #Restart=, so a single failure here leaves time never syncing for the
+      #rest of that boot. Same fix already applied to gpsd.service below.
+      grep -qi '^Restart=' /etc/systemd/system/chrony.service || sed -i '/^ExecStart=.*/a Restart=on-failure' /etc/systemd/system/chrony.service
+      grep -qi '^RestartSec=' /etc/systemd/system/chrony.service || sed -i '/^Restart=on-failure.*/a RestartSec=30' /etc/systemd/system/chrony.service
 
       #disable hotplug
       sed -i 's/^USBAUTO=.*/USBAUTO="false"/' /etc/default/gpsd
