@@ -49,46 +49,47 @@ if [ ! -f "$RCLONE_CONF_TMP" ]; then
     fi
 fi
 
+# Hold the LTE modem on for the duration of this run. lte_modem_off.timer
+# runs on its own fixed schedule regardless of whether this script is still
+# uploading (it's a safety net "in case this script hangs" - see its own
+# service description), so a slow/flaky-network run can have its network cut
+# out from under it mid-upload. lte_off.sh already honors this same flag
+# (tools/lte_hold.sh uses it for the manual SSH override), so holding it here
+# just extends that same mechanism to our own run.
+#
+# Only release it if THIS run is the one that created it - a manual hold via
+# tools/lte_hold.sh must survive past this script finishing. The trap is a
+# safety net for abnormal exits (STEP 6 below releases it explicitly on the
+# normal path, before its own lte_off.sh call, so upload_window mode can
+# still power the modem off promptly once uploads are actually done).
+LTE_HOLD_FLAG="/tmp/rtkbase_lte_hold"
+LTE_HOLD_CREATED_BY_US=0
+if [ ! -f "$LTE_HOLD_FLAG" ]; then
+    touch "$LTE_HOLD_FLAG"
+    LTE_HOLD_CREATED_BY_US=1
+fi
+release_lte_hold() {
+    if [ "$LTE_HOLD_CREATED_BY_US" -eq 1 ]; then
+        rm -f "$LTE_HOLD_FLAG"
+    fi
+}
+trap release_lte_hold EXIT
+
+# Upload order deliberately puts the small, no-retry-if-missed sources
+# (MPPT/thermal/journal - one-shot snapshots; a failed upload here is just
+# gone, nothing keeps a copy to retry) ahead of GNSS (large, and already
+# self-healing - see STEP 4/5 below: an unsynced .ubx just stays on disk
+# and gets picked up again next run, no data actually lost). If this run
+# is having a slow/flaky-network day, that ordering spends the good early
+# part of its network budget on the things that can't recover from being
+# skipped, and risks losing time on the one thing that already tolerates
+# being late instead.
+
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and compress new .ubx files in ${datadir} every ${file_rotate_time} hour..."
 
 cd "${datadir}" || exit 1
 
-# ----------------- STEP 1: COMPRESSION (GNSS raw data) -----------------
-processed_files=()
-
-for file in *.ubx; do
-    [[ -e "$file" ]] || continue
-
-    if [[ $(find "$file" -mmin +1) ]]; then
-        echo "Compressing raw data file: $file"
-        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file%.*}_${HOSTNAME}.7z" "$file" >/dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            processed_files+=("$file")
-        else
-            echo "Compression failed for: $file"
-            rm -f "${file%.*}_${HOSTNAME}.7z"
-        fi
-    fi
-done
-
-if [ ${#processed_files[@]} -gt 0 ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of GNSS data to Google Drive..."
-    rclone move "./" "${GDRIVE_GNSS_REMOTE}" \
-        --config "${RCLONE_CONF_TMP}" \
-        --no-update-modtime \
-        --include "*.7z" \
-        --transfers 4 \
-        --checkers 8 \
-        --tpslimit 10 \
-        --timeout 60s \
-        --contimeout 30s \
-        --log-level INFO \
-        --log-file "$RCLONE_LOG_GNSS"
-else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
-fi
-
-# ----------------- STEP 2: MPPT STATUS (point-in-time snapshot) -----------------
+# ----------------- STEP 1: MPPT STATUS (point-in-time snapshot) -----------------
 # mppt_port is only set once install.sh --detect-mppt has paired the
 # RS485-USB adapter with a udev symlink. Empty means no MPPT hardware here.
 if [ -n "${mppt_port}" ]; then
@@ -103,6 +104,8 @@ if [ -n "${mppt_port}" ]; then
             --no-update-modtime \
             --timeout 60s \
             --contimeout 30s \
+            --retries 2 \
+            --low-level-retries 3 \
             --log-level INFO \
             --log-file "$RCLONE_LOG_MPPT"
     else
@@ -113,11 +116,11 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - MPPT not configured (mppt_port is empty), skipping."
 fi
 
-# ----------------- STEP 2b: MPPT LOAD POWER SAMPLES (1-min series) -----------------
+# ----------------- STEP 1b: MPPT LOAD POWER SAMPLES (1-min series) -----------------
 # mppt_power_sample.timer appends one load-power reading per minute to this
 # tmpfs CSV. Upload the window's accumulation and rotate: mv first so the
 # sampler immediately starts a fresh file and no sample written mid-upload
-# is lost. Independent of the STEP 2 snapshot - uploads even if that failed.
+# is lost. Independent of the STEP 1 snapshot - uploads even if that failed.
 POWER_SAMPLES="/tmp/rtkbase_mppt_power_${HOSTNAME}.csv"
 if [ -s "${POWER_SAMPLES}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT load power samples..."
@@ -128,12 +131,14 @@ if [ -s "${POWER_SAMPLES}" ]; then
         --no-update-modtime \
         --timeout 60s \
         --contimeout 30s \
+        --retries 2 \
+        --low-level-retries 3 \
         --log-level INFO \
         --log-file "$RCLONE_LOG_MPPT"
     rm -f "${POWER_SAMPLES_SNAP}"
 fi
 
-# ----------------- STEP 3: THERMAL SENSOR (point-in-time snapshot) -----------------
+# ----------------- STEP 2: THERMAL SENSOR (point-in-time snapshot) -----------------
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
 if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
@@ -142,6 +147,8 @@ if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
         --no-update-modtime \
         --timeout 60s \
         --contimeout 30s \
+        --retries 2 \
+        --low-level-retries 3 \
         --log-level INFO \
         --log-file "$RCLONE_LOG_THERMAL"
 else
@@ -149,8 +156,8 @@ else
 fi
 rm -f "${THERMAL_TMP}"
 
-# ----------------- STEP 4: SYSTEM JOURNAL (continuous log) -----------------
-# Exported last, after STEP 2/3 have already run and logged their own
+# ----------------- STEP 3: SYSTEM JOURNAL (continuous log) -----------------
+# Exported after STEP 1/2 have already run and logged their own
 # success/failure - so this same run's journal upload is a self-contained
 # record of what happened, instead of only showing up in the *next* run's
 # journal export two hours later.
@@ -186,9 +193,53 @@ if [ -f "${JOURNAL_TMP}" ]; then
         --no-update-modtime \
         --timeout 60s \
         --contimeout 30s \
+        --retries 2 \
+        --low-level-retries 3 \
         --log-level INFO \
         --log-file "$RCLONE_LOG_JOURNAL"
     rm -f "${JOURNAL_TMP}"
+fi
+
+# ----------------- STEP 4: COMPRESSION + UPLOAD (GNSS raw data) -----------------
+# Deliberately last of the four upload sources - see the module-level
+# comment above STEP 1 for why (this is the one source that already
+# tolerates being late: STEP 5 below leaves an unsynced .ubx on disk to
+# retry next run, unlike the point-in-time snapshots above, which have no
+# such recovery if this run runs out of time or network).
+processed_files=()
+
+for file in *.ubx; do
+    [[ -e "$file" ]] || continue
+
+    if [[ $(find "$file" -mmin +1) ]]; then
+        echo "Compressing raw data file: $file"
+        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file%.*}_${HOSTNAME}.7z" "$file" >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            processed_files+=("$file")
+        else
+            echo "Compression failed for: $file"
+            rm -f "${file%.*}_${HOSTNAME}.7z"
+        fi
+    fi
+done
+
+if [ ${#processed_files[@]} -gt 0 ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of GNSS data to Google Drive..."
+    rclone move "./" "${GDRIVE_GNSS_REMOTE}" \
+        --config "${RCLONE_CONF_TMP}" \
+        --no-update-modtime \
+        --include "*.7z" \
+        --transfers 4 \
+        --checkers 8 \
+        --tpslimit 10 \
+        --timeout 60s \
+        --contimeout 30s \
+        --retries 2 \
+        --low-level-retries 3 \
+        --log-level INFO \
+        --log-file "$RCLONE_LOG_GNSS"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
 fi
 
 # ----------------- STEP 5: CLEANUP -----------------
@@ -217,6 +268,11 @@ rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_T
 # off right now instead of waiting for that deadline, since uploads are
 # already done - lte_off.sh already checks the hold flag and no-ops safely
 # if called again later by the timer.
+#
+# Release our hold explicitly here (rather than waiting for the EXIT trap):
+# lte_off.sh below checks the same flag and would otherwise refuse to power
+# down, defeating upload_window mode's whole point.
+release_lte_hold
 if [ "${lte_schedule_mode:-fixed_window}" = "upload_window" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done (upload_window mode), switching LTE modem off..."
     bash "${BASEDIR}/tools/lte_off.sh"
