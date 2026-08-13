@@ -391,16 +391,18 @@ rtkbase_requirements(){
       then
         cp "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf"
       fi
-      # Auto-detect the SIMCOM AT port. 90-usb-simcom-at.rules gives both the
-      # A76XX and the SIM7600G-H the same stable /dev/ttymodemAT symlink, so
+      # Auto-detect the LTE modem AT port. Each supported modem's udev rule
+      # (90-usb-simcom-at.rules for the SIMCOM A76XX/SIM7600G-H,
+      # 92-usb-teltonika-at.rules for the Teltonika Calyx EBD021/EDB021)
+      # gives its AT interface the same stable /dev/ttymodemAT symlink, so
       # unlike GNSS/MPPT detection this doesn't need a separate --detect-modem
-      # step or chip-specific matching: if the symlink exists, some SIMCOM
-      # modem is plugged in, and LTE power-saving (fixed_window by default,
-      # see settings.conf [lte]) can work right after install instead of
-      # needing modem_at_port set by hand.
+      # step or chip-specific matching here: if the symlink exists, some
+      # supported modem is plugged in, and LTE power-saving (fixed_window by
+      # default, see settings.conf [lte]) can work right after install
+      # instead of needing modem_at_port set by hand.
       if [ -e /dev/ttymodemAT ] && grep -qE "^modem_at_port=''" "${rtkbase_path}/settings.conf"; then
         sudo -u "${RTKBASE_USER}" sed -i "s|^modem_at_port=.*|modem_at_port='/dev/ttymodemAT'|" "${rtkbase_path}/settings.conf"
-        echo "Detected SIMCOM AT port -> modem_at_port set to /dev/ttymodemAT in settings.conf"
+        echo "Detected LTE modem AT port -> modem_at_port set to /dev/ttymodemAT in settings.conf"
       fi
       # Configure 1-Wire for the optional DS18B20-class temperature sensor.
       # Harmless no-op on boards where nothing is wired to the GPIO pin: the

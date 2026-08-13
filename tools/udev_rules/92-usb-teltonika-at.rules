@@ -1,0 +1,29 @@
+# Teltonika Calyx EBD021/EDB021 (internal module: ALA440), USB ID 1d12:0101.
+# Confirmed on real hardware (Raspberry Pi 5, Debian 13, kernel 6.18):
+#   - interface 0 (Wireless/RNDIS) + interface 1 (CDC Data) are claimed by
+#     rndis_host automatically and become the "usb0" network interface -
+#     that's the data path, same usb0 naming as the SIMCOM modems.
+#   - interfaces 2/3/4/5 are Vendor Specific (class 0xff) and aren't claimed
+#     by any driver out of the box, so no /dev/ttyUSB* exists for them yet.
+#   - interfaces 2 and 5 (bNumEndpoints=2) don't answer AT commands (likely
+#     diag/GPS). Interfaces 3 and 4 (bNumEndpoints=3) both answer AT
+#     commands identically (ATI/AT+CFUN?/AT+CREG? gave the same output on
+#     both) - interface 3 is used below as the AT port, picked arbitrarily
+#     since either works; interface 4 is a fallback if 3 ever misbehaves.
+#
+# First rule: the kernel's 'option' usbserial driver doesn't know this
+# VID:PID, so it never binds those vendor-specific interfaces on its own.
+# Register the ID at runtime so it does - this creates /dev/ttyUSB* for
+# interfaces 2/3/4/5 as a side effect, which raises its own "add" uevents
+# handled by the rules below. The dynamic-ID sysfs file lives on the
+# usb-serial bus under the "option1" driver name, NOT /sys/bus/usb/drivers/
+# option/ (that one is only the thin per-device probe wrapper and has no
+# new_id attribute).
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="1d12", ATTRS{idProduct}=="0101", RUN+="/bin/sh -c 'modprobe option 2>/dev/null; echo 1d12 0101 > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'"
+
+# idVendor/idProduct live on the USB device node while bInterfaceNumber lives
+# on the USB interface (child) node, and udev requires every ATTRS{} in one
+# rule to match on the same node - so this needs two rules relaying through
+# an ENV tag, same trick as the SIMCOM entry in 90-usb-simcom-at.rules.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1d12", ATTRS{idProduct}=="0101", ENV{USB_TYPE}="1d12:0101"
+ENV{USB_TYPE}=="1d12:0101", SUBSYSTEM=="tty", ATTRS{bInterfaceNumber}=="03", SYMLINK+="ttymodemAT", GROUP="dialout"

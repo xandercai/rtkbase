@@ -1,6 +1,9 @@
 #!/bin/bash
 connection_name='Cellular Modem'
-modem_name=A76XX
+# Extended-regex alternation: SIMCOM A76XX/SIM7600G-H reports "A76XX" in its
+# udev info, the Teltonika Calyx EBD021/EDB021 doesn't have an equivalent
+# model string but its USB vendor ID "1d12" shows up instead.
+modem_name='A76XX|1d12'
 
 function man_help() {
     echo '####################################'
@@ -37,7 +40,7 @@ function get_lte_interface_name() {
     #echo 'modem name' $1
     for dev in /sys/class/net/*/ 
     do
-        lte_device_interface_name=$(udevadm info $dev | grep -q "${1}" && echo "$(basename $dev)" && exit 0)
+        lte_device_interface_name=$(udevadm info $dev | grep -qE "${1}" && echo "$(basename $dev)" && exit 0)
         [[ ! -z $lte_device_interface_name ]] && echo $lte_device_interface_name && break
     done
     
