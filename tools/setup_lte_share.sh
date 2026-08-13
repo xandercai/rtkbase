@@ -1,8 +1,9 @@
 #!/bin/bash
 # One-time network setup for a two-Pi deployment: this Pi has the LTE modem
-# (SIM7600, exposed as the "usb0" ethernet-class interface) and shares that
-# connection over its physical "eth0" port to a second, identical Pi that
-# has no LTE hardware of its own.
+# (SIM7600 or Teltonika Calyx EDB021 - both expose their data connection as
+# the "usb0" ethernet-class interface) and shares that connection over its
+# physical "eth0" port to a second, identical Pi that has no LTE hardware
+# of its own.
 #
 # By default NetworkManager/netplan bind a single generic ethernet profile
 # to whichever ethernet-class device is available, so usb0 and eth0 end up
