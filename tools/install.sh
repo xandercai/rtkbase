@@ -778,7 +778,19 @@ _add_modem_port(){
 
 _configure_modem(){
   "${rtkbase_path}"/tools/lte_network_mgmt.sh --connection_rename
-  sudo -u "${RTKBASE_USER}" "${rtkbase_path}/venv/bin/python" "${rtkbase_path}"/tools/modem_config.py --config && \
+  # modem_config.py (via the vendored sim_modem lib) only speaks SIMCOM's AT
+  # command set - on a Teltonika Calyx it dies partway through (e.g. its
+  # network-mode query) with an unhandled exception. That modem's data
+  # interface doesn't need this step anyway: rndis_host binds its usb0
+  # interface automatically (see 92-usb-teltonika-at.rules), unlike SIMCOM
+  # which needs this script's AT commands to switch into ECM mode. Don't
+  # let a failure here block --lte_priority below, which is a plain nmcli
+  # route-metric change with no modem-specific AT commands involved - the
+  # two are unrelated.
+  sudo -u "${RTKBASE_USER}" "${rtkbase_path}/venv/bin/python" "${rtkbase_path}"/tools/modem_config.py --config
+  if [ $? -ne 0 ]; then
+    echo "Warning: modem_config.py failed (expected on non-SIMCOM modems, e.g. Teltonika Calyx, which only need connection_rename/lte_priority below - not this SIMCOM-specific ECM-mode setup)."
+  fi
   "${rtkbase_path}"/tools/lte_network_mgmt.sh --lte_priority
 }
 
