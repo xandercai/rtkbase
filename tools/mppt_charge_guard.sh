@@ -34,7 +34,13 @@ else
         echo "mppt_charge_guard: MPPT read failed, leaving charging state unchanged."
         exit 1
     fi
-    temperature_c=$(echo "$reading" | grep -oE '"battery_temperature_c":-?[0-9.]+' | cut -d: -f2)
+    # mppt_read.py prints via Python's json.dumps(), whose default
+    # separator puts a space after the colon ('"battery_temperature_c":
+    # 10.82') - unlike thermal_read.sh's own hand-built printf JSON above,
+    # which has none. Match that space explicitly instead of reusing the
+    # same colon-adjacent pattern, which silently matched nothing here and
+    # made every fallback reading fail with "could not parse temperature".
+    temperature_c=$(echo "$reading" | grep -oE '"battery_temperature_c": *-?[0-9.]+' | grep -oE '\-?[0-9.]+$')
     source_label="MPPT battery_temperature_c"
 fi
 
