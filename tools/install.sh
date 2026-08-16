@@ -722,33 +722,30 @@ configure_gnss(){
 
 detect_usb_modem() {
     echo '################################'
-    echo 'SIMCOM A76XX LTE MODEM DETECTION'
+    echo 'LTE MODEM DETECTION'
     echo '################################'
-      #This function try to detect a simcom lte modem (A76XX serie) and write the port inside settings.conf
-  MODEM_DETECTED=0
-  for sysdevpath in $(find /sys/bus/usb/devices/usb*/ -name dev); do
-      ID_MODEL=''
-      syspath="${sysdevpath%/dev}"
-      devname="$(udevadm info -q name -p "${syspath}")"
-      if [[ "$devname" == "bus/"* ]]; then continue; fi
-      eval "$(udevadm info -q property --export -p "${syspath}")"
-      #if [[ $MINOR != 1 ]]; then continue; fi
-      if [[ -z "$ID_MODEL" ]]; then continue; fi
-      if [[ "$ID_MODEL" =~ 'A76XX' ]]
-      then
-        detected_modem[0]=$devname
-        detected_modem[1]=$ID_SERIAL
-        echo '/dev/'"${detected_modem[0]}" ' - ' "${detected_modem[1]}"
-        MODEM_DETECTED=1
-      fi
-  done
-  if [[ $MODEM_DETECTED -eq 1 ]]; then
+  # Every supported modem's own udev rule (tools/udev_rules/
+  # 90-usb-simcom-at.rules for the SIMCOM A76XX/SIM7600G-H,
+  # 92-usb-teltonika-at.rules for the Teltonika Calyx EBD021/EDB021) creates
+  # this same stable /dev/ttymodemAT symlink for its AT interface - so its
+  # mere existence is already the authoritative "some supported modem is
+  # plugged in" signal, the same one rtkbase_requirements()'s own
+  # auto-detect-on-install step trusts (see its comment above). Checking it
+  # directly here instead of re-deriving idVendor:idProduct matches a
+  # second time means a future new modem only ever needs its own udev rule
+  # added, not a second place kept in sync - this function previously only
+  # matched SIMCOM's ID_MODEL string, so it always reported "No modem
+  # detected" for a Teltonika Calyx even though its udev rule had already
+  # created /dev/ttymodemAT correctly, leaving --detect-modem unusable for
+  # that modem specifically.
+  if [ -e /dev/ttymodemAT ]; then
+    echo "Found LTE modem AT port: /dev/ttymodemAT -> $(readlink -f /dev/ttymodemAT)"
     return 0
   else
-    echo 'No modem detected'
+    echo 'No modem detected (no /dev/ttymodemAT symlink - is it plugged in, and are the udev rules installed?).'
     return 1
   fi
-  }
+}
 
 _add_modem_port(){
   if [[ -f "${rtkbase_path}/settings.conf" ]]  && grep -qE "^modem_at_port=.*" "${rtkbase_path}"/settings.conf #check if settings.conf exists
