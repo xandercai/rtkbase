@@ -35,6 +35,23 @@ MPPT_TMP="/tmp/rtkbase_mppt_${HOSTNAME}.json"
 THERMAL_TMP="/tmp/rtkbase_thermal_${HOSTNAME}.json"
 TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
 
+# Runs an rclone upload; on failure, prints the tail of its own log so the
+# real error (rate limit, auth, timeout...) lands in journalctl instead of
+# vanishing - rclone's --log-file writes to a local file, not stdout, and
+# every one of those files gets deleted at the end of this script (STEP 5)
+# regardless of outcome, so without this the only trace of a failure used
+# to be the fact that the file never showed up on Drive days later.
+_rclone_upload_or_warn() {
+    local log_file="$1" label="$2"
+    shift 2
+    if rclone "$@" --log-file "$log_file"; then
+        return 0
+    fi
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: ${label} upload failed:"
+    tail -n 20 "$log_file" 2>/dev/null | sed 's/^/    /'
+    return 1
+}
+
 # ============================================================
 # Main logic
 # ============================================================
@@ -99,15 +116,14 @@ if [ -n "${mppt_port}" ]; then
         > "${MPPT_TMP}"
     then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT snapshot to Google Drive..."
-        rclone copyto "${MPPT_TMP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt.json" \
+        _rclone_upload_or_warn "$RCLONE_LOG_MPPT" "MPPT snapshot" copyto "${MPPT_TMP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt.json" \
             --config "${RCLONE_CONF_TMP}" \
             --no-update-modtime \
             --timeout 60s \
             --contimeout 30s \
-            --retries 2 \
-            --low-level-retries 3 \
-            --log-level INFO \
-            --log-file "$RCLONE_LOG_MPPT"
+            --retries 3 \
+            --low-level-retries 10 \
+            --log-level INFO
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: MPPT read failed, skipping upload."
     fi
@@ -126,35 +142,43 @@ if [ -s "${POWER_SAMPLES}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT load power samples..."
     POWER_SAMPLES_SNAP="${POWER_SAMPLES}.uploading"
     mv "${POWER_SAMPLES}" "${POWER_SAMPLES_SNAP}"
-    rclone copyto "${POWER_SAMPLES_SNAP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt_power.csv" \
+    _rclone_upload_or_warn "$RCLONE_LOG_MPPT" "MPPT load power samples" copyto "${POWER_SAMPLES_SNAP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt_power.csv" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --timeout 60s \
         --contimeout 30s \
-        --retries 2 \
-        --low-level-retries 3 \
-        --log-level INFO \
-        --log-file "$RCLONE_LOG_MPPT"
+        --retries 3 \
+        --low-level-retries 10 \
+        --log-level INFO
     rm -f "${POWER_SAMPLES_SNAP}"
 fi
 
 # ----------------- STEP 2: THERMAL SENSOR (point-in-time snapshot) -----------------
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
-if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
-    rclone copyto "${THERMAL_TMP}" "${GDRIVE_THERMAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_thermal.json" \
-        --config "${RCLONE_CONF_TMP}" \
-        --no-update-modtime \
-        --timeout 60s \
-        --contimeout 30s \
-        --retries 2 \
-        --low-level-retries 3 \
-        --log-level INFO \
-        --log-file "$RCLONE_LOG_THERMAL"
+# thermal_sensor_present is only '1' once install.sh --detect-thermal has
+# confirmed a DS18B20 actually answers on the 1-Wire bus (see
+# settings.conf's [thermal] section). Empty/'0' means no sensor wired here -
+# don't burn a cycle attempting and warning about a read that will never
+# succeed. battery_temperature_c in the MPPT snapshot (STEP 1) covers this
+# station on the dashboard instead, at no extra upload cost.
+if [ "${thermal_sensor_present:-0}" = "1" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
+    if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
+        _rclone_upload_or_warn "$RCLONE_LOG_THERMAL" "Thermal snapshot" copyto "${THERMAL_TMP}" "${GDRIVE_THERMAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_thermal.json" \
+            --config "${RCLONE_CONF_TMP}" \
+            --no-update-modtime \
+            --timeout 60s \
+            --contimeout 30s \
+            --retries 3 \
+            --low-level-retries 10 \
+            --log-level INFO
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: thermal sensor read failed, skipping upload."
+    fi
+    rm -f "${THERMAL_TMP}"
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: thermal sensor read failed, skipping upload."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Thermal sensor not detected (thermal_sensor_present is not '1'), skipping."
 fi
-rm -f "${THERMAL_TMP}"
 
 # ----------------- STEP 3: SYSTEM JOURNAL (continuous log) -----------------
 # Exported after STEP 1/2 have already run and logged their own
@@ -188,15 +212,14 @@ fi
 
 if [ -f "${JOURNAL_TMP}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading journal log to Google Drive..."
-    rclone copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
+    _rclone_upload_or_warn "$RCLONE_LOG_JOURNAL" "Journal log" copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --timeout 60s \
         --contimeout 30s \
-        --retries 2 \
-        --low-level-retries 3 \
-        --log-level INFO \
-        --log-file "$RCLONE_LOG_JOURNAL"
+        --retries 3 \
+        --low-level-retries 10 \
+        --log-level INFO
     rm -f "${JOURNAL_TMP}"
 fi
 
@@ -234,8 +257,8 @@ if [ ${#processed_files[@]} -gt 0 ]; then
         --tpslimit 10 \
         --timeout 60s \
         --contimeout 30s \
-        --retries 2 \
-        --low-level-retries 3 \
+        --retries 3 \
+        --low-level-retries 10 \
         --log-level INFO \
         --log-file "$RCLONE_LOG_GNSS"
 else

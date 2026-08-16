@@ -250,8 +250,9 @@ mppt_baudrate='115200'
 mppt_slave_id='1'
 
 # Low-temperature charge guard: periodically (mppt_charge_check_minutes)
-# reads the DS18B20 sensor (tools/thermal_read.sh, NOT the MPPT's own
-# battery_temperature_c reading) and writes the "charging device on/off"
+# reads the DS18B20 sensor (tools/thermal_read.sh) if [thermal]
+# thermal_sensor_present='1' below, otherwise falls back to the MPPT's own
+# battery_temperature_c reading - and writes the "charging device on/off"
 # coil accordingly - below the threshold, charging is switched off; at or
 # above it, switched back on. Only takes effect when mppt_port above is set.
 mppt_charge_min_temp_c='2'
@@ -260,8 +261,23 @@ mppt_charge_check_minutes='20'
 mppt_charge_guard_boot_delay='2'
 
 [thermal]
-# GPIO pin (BCM/Broadcom numbering, not the physical header pin number) wired
-# to the 1-Wire (DS18B20-class) temperature sensor. BCM4 = physical pin 7,
-# the default 1-Wire pin on Raspberry Pi OS. install.sh configures the
-# matching w1-gpio dtoverlay automatically.
+# GPIO pin (BCM/Broadcom numbering, not the physical header pin number) the
+# w1-gpio 1-Wire overlay binds to. BCM4 = physical pin 7, the default 1-Wire
+# pin on Raspberry Pi OS. install.sh always configures this overlay
+# regardless of thermal_sensor_present below - harmless if nothing is wired,
+# and required groundwork before a DS18B20 can ever be detected.
 thermal_gpio_pin='4'
+
+# Whether a DS18B20 sensor has actually been confirmed present on the
+# 1-Wire bus. Defaults to disabled: a station with no thermal sensor wired
+# (common - many stations only have the MPPT controller's own
+# battery_temperature_c) shouldn't spend every archive_and_clean.sh cycle
+# attempting and warning about a read that will never succeed, and
+# rtkdashboard already falls back to the MPPT reading when no thermal.json
+# ever shows up for a station.
+#
+# The 1-Wire overlay only loads after a reboot, so this can't be
+# auto-detected during the initial install.sh run - after rebooting once,
+# run 'install.sh --detect-thermal' to scan for a DS18B20 and flip this to
+# '1' if one answers.
+thermal_sensor_present='0'

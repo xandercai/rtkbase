@@ -80,6 +80,15 @@ man_help(){
     echo '                         /dev/epever485 via udev, so it never gets confused with'
     echo '                         the LTE modem'\''s serial ports.'
     echo ''
+    echo '        -k | --detect-thermal'
+    echo '                         Scan for a DS18B20 1-Wire sensor and, if found, mark'
+    echo '                         thermal_sensor_present=1 in settings.conf so'
+    echo '                         archive_and_clean.sh starts uploading it. Run this once'
+    echo '                         after rebooting post-install (the w1-gpio overlay only'
+    echo '                         loads on the next boot). Leave unset if this station has'
+    echo '                         no DS18B20 wired - rtkdashboard falls back to the MPPT'
+    echo '                         controller'\''s own battery_temperature_c reading instead.'
+    echo ''
     echo '        -z | --zeroconf'
     echo '                         Install zeroconf/avahi service definition.'
     echo '                         It helps to detect the base station on the network.'
@@ -756,6 +765,18 @@ _add_modem_port(){
     echo 'settings.conf is missing'
     return 1
   fi
+  echo "modem_at_port set to ${MODEM_AT_PORT} in settings.conf"
+  # start_services() only enables lte_modem_on/off.timer if modem_at_port is
+  # already set at the moment IT runs - on a fresh --all install that's
+  # before this function ever gets a chance to set it (--detect-modem is a
+  # separate, later, opt-in step, same as --detect-mppt), so nothing else
+  # will go back and enable them once modem_at_port finally is set. Do it
+  # here instead - this is exactly the gap that left a real station's LTE
+  # power-saving schedule silently disabled after a reinstall (timers
+  # present on disk, never enabled, no error anywhere).
+  systemctl daemon-reload
+  systemctl enable --now lte_modem_on.timer
+  systemctl enable --now lte_modem_off.timer
 }
 
 _configure_modem(){
@@ -830,6 +851,41 @@ _add_mppt_config(){
   systemctl daemon-reload
   systemctl enable --now mppt_charge_guard.timer
   systemctl enable --now mppt_power_sample.timer
+}
+
+detect_thermal_sensor() {
+  echo '################################'
+  echo 'DS18B20 1-WIRE THERMAL SENSOR DETECTION'
+  echo '################################'
+  # Needs the w1-gpio/w1-therm overlay (see rtkbase_requirements(), driven
+  # by settings.conf's thermal_gpio_pin) already loaded - that only happens
+  # on the next boot after install, so this has to be a separate, later,
+  # opt-in step rather than something --all can do in one pass.
+  local sensor_dir
+  sensor_dir=$(find /sys/bus/w1/devices -maxdepth 1 -name '28-*' -print -quit 2>/dev/null)
+  if [[ -n "$sensor_dir" ]]; then
+    echo "Found DS18B20 sensor: $(basename "$sensor_dir")"
+    return 0
+  else
+    echo 'No DS18B20 sensor found under /sys/bus/w1/devices.'
+    echo 'If one is wired, make sure you rebooted after install so the w1-gpio overlay is loaded, then retry.'
+    return 1
+  fi
+}
+
+_add_thermal_config(){
+  if [[ -f "${rtkbase_path}/settings.conf" ]] && grep -qE "^thermal_sensor_present=.*" "${rtkbase_path}"/settings.conf
+  then
+    sudo -u "${RTKBASE_USER}" sed -i "s|^thermal_sensor_present=.*|thermal_sensor_present='1'|" "${rtkbase_path}"/settings.conf
+  elif [[ -f "${rtkbase_path}/settings.conf" ]] && ! grep -qE "^thermal_sensor_present=.*" "${rtkbase_path}"/settings.conf
+  then
+    printf "[thermal]\nthermal_sensor_present='1'\n" | sudo tee -a "${rtkbase_path}"/settings.conf > /dev/null
+  elif [[ ! -f "${rtkbase_path}/settings.conf" ]]
+  then
+    echo 'settings.conf is missing'
+    return 1
+  fi
+  echo "thermal_sensor_present set to '1' in settings.conf"
 }
 
 start_services() {
@@ -931,11 +987,12 @@ main() {
   ARG_CONFIGURE_GNSS=0
   ARG_DETECT_MODEM=0
   ARG_DETECT_MPPT=0
+  ARG_DETECT_THERMAL=0
   ARG_START_SERVICES=0
   ARG_ZEROCONF=0
   ARG_ALL=0
 
-  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jf:qtgencmpsza: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,detect-mppt,start-services,zeroconf,all: -- "$@")
+  PARSED_ARGUMENTS=$(getopt --name install --options hu:drbi:jf:qtgencmpszka: --longoptions help,user:,dependencies,rtklib,rtkbase-release,rtkbase-repo:,rtkbase-bundled,rtkbase-custom:,rtkbase-requirements,unit-files,gpsd-chrony,detect-gnss,no-write-port,configure-gnss,detect-modem,detect-mppt,detect-thermal,start-services,zeroconf,all: -- "$@")
   VALID_ARGUMENTS=$?
   if [ "$VALID_ARGUMENTS" != "0" ]; then
     #man_help
@@ -964,6 +1021,7 @@ main() {
         -c | --configure-gnss) ARG_CONFIGURE_GNSS=1    ; shift   ;;
         -m | --detect-modem) ARG_DETECT_MODEM=1        ; shift   ;;
         -p | --detect-mppt) ARG_DETECT_MPPT=1           ; shift   ;;
+        -k | --detect-thermal) ARG_DETECT_THERMAL=1     ; shift   ;;
         -s | --start-services) ARG_START_SERVICES=1    ; shift   ;;
         -z | --zeroconf) ARG_ZEROCONF=1                ; shift   ;;
         -a | --all) ARG_ALL="${2}"                     ; shift 2 ;;
@@ -1028,6 +1086,7 @@ main() {
   [ $ARG_CONFIGURE_GNSS -eq 1 ] && { configure_gnss ; ((cumulative_exit+=$?)) ;}
   [ $ARG_DETECT_MODEM -eq 1 ] && { detect_usb_modem && _add_modem_port && _configure_modem ; ((cumulative_exit+=$?)) ;}
   [ $ARG_DETECT_MPPT -eq 1 ] && { detect_mppt && _add_mppt_config ; ((cumulative_exit+=$?)) ;}
+  [ $ARG_DETECT_THERMAL -eq 1 ] && { detect_thermal_sensor && _add_thermal_config ; ((cumulative_exit+=$?)) ;}
   [ $ARG_ZEROCONF -eq 1 ] && { install_zeroconf_service; ((cumulative_exit+=$?)) ;}
   [ $ARG_START_SERVICES -eq 1 ] && { start_services ; ((cumulative_exit+=$?)) ;}
 }
