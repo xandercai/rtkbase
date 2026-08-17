@@ -460,7 +460,10 @@ install_unit_files() {
       then 
         #Install unit files
         "${rtkbase_path}"/tools/copy_unit.sh --python_path "${rtkbase_path}"/venv/bin/python --user "${RTKBASE_USER}"
-        systemctl enable rtkbase_web.service
+        # web_ui_enabled defaults to '1' in settings.conf.default - only
+        # skip enabling the admin GUI if a station explicitly opted out
+        # before this ran (see settings.conf's [web] section).
+        grep -qE "^web_ui_enabled='0'" "${rtkbase_path}"/settings.conf 2>/dev/null || systemctl enable rtkbase_web.service
         systemctl enable rtkbase_archive.timer
         systemctl daemon-reload
         #Add dialout group to user
@@ -902,7 +905,7 @@ start_services() {
   echo 'STARTING SERVICES'
   echo '################################'
   systemctl daemon-reload
-  systemctl enable --now rtkbase_web.service
+  grep -qE "^web_ui_enabled='0'" "${rtkbase_path}"/settings.conf 2>/dev/null || systemctl enable --now rtkbase_web.service
   systemctl enable --now str2str_tcp.service
   systemctl enable --now str2str_file.service
   systemctl restart gpsd.service
