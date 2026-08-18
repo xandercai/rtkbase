@@ -83,11 +83,14 @@ man_help(){
     echo '        -k | --detect-thermal'
     echo '                         Scan for a DS18B20 1-Wire sensor and, if found, mark'
     echo '                         thermal_sensor_present=1 in settings.conf so'
-    echo '                         archive_and_clean.sh starts uploading it. Run this once'
-    echo '                         after rebooting post-install (the w1-gpio overlay only'
-    echo '                         loads on the next boot). Leave unset if this station has'
-    echo '                         no DS18B20 wired - rtkdashboard falls back to the MPPT'
-    echo '                         controller'\''s own battery_temperature_c reading instead.'
+    echo '                         archive_and_clean.sh starts uploading it. On Raspberry'
+    echo '                         Pi this already happens automatically during install (no'
+    echo '                         reboot needed) - only run this by hand if you wired a'
+    echo '                         sensor up later, or on boards without the dtoverlay tool'
+    echo '                         (e.g. Armbian/Orange Pi), where it needs a reboot first.'
+    echo '                         Nothing to do if this station has no DS18B20 at all -'
+    echo '                         rtkdashboard falls back to the MPPT controller'\''s own'
+    echo '                         battery_temperature_c reading instead.'
     echo ''
     echo '        -z | --zeroconf'
     echo '                         Install zeroconf/avahi service definition.'
@@ -413,9 +416,23 @@ rtkbase_requirements(){
         sudo -u "${RTKBASE_USER}" sed -i "s|^modem_at_port=.*|modem_at_port='/dev/ttymodemAT'|" "${rtkbase_path}/settings.conf"
         echo "Detected LTE modem AT port -> modem_at_port set to /dev/ttymodemAT in settings.conf"
       fi
-      # Configure 1-Wire for the optional DS18B20-class temperature sensor.
-      # Harmless no-op on boards where nothing is wired to the GPIO pin: the
-      # w1-therm driver just won't find any 28-* slave device on the bus.
+      # Configure 1-Wire for the optional DS18B20-class temperature sensor -
+      # but only if one actually answers. Persisting the overlay
+      # unconditionally (the old behavior) makes the kernel poll that GPIO
+      # pin forever on every boot; on a station with nothing wired, the
+      # floating pin picks up enough noise for the w1 bus master's search to
+      # occasionally think something answered ("Family 0 ... is not
+      # registered" in dmesg/journal) - pure noise with no device behind it.
+      #
+      # Raspberry Pi's dtoverlay tool can apply an overlay to the *running*
+      # kernel immediately, so detection can happen right here in this
+      # install run: load it just long enough to see if anything shows up
+      # under /sys/bus/w1/devices, then either persist it (found) or remove
+      # it again (not found) - no reboot needed either way. Boards without
+      # dtoverlay (e.g. Armbian/Orange Pi - see opizero_temp_offset.sh
+      # below) can't be probed before a reboot, so they fall back to the
+      # old always-configure-then-check-after-reboot flow; run
+      # 'install.sh --detect-thermal' on those once you've rebooted.
       THERMAL_GPIO_PIN=$(grep '^thermal_gpio_pin=' "${rtkbase_path}/settings.conf" | cut -d"'" -f2)
       [ -z "$THERMAL_GPIO_PIN" ] && THERMAL_GPIO_PIN=4
       if [ -f /boot/firmware/config.txt ]; then
@@ -425,13 +442,42 @@ rtkbase_requirements(){
       else
         CONFIG_TXT=''
       fi
-      if [ -n "$CONFIG_TXT" ]; then
-        if ! grep -qxF "dtoverlay=w1-gpio,gpiopin=${THERMAL_GPIO_PIN}" "$CONFIG_TXT"; then
+
+      THERMAL_DETECTED=0
+      if command -v dtoverlay >/dev/null 2>&1; then
+        if dtoverlay w1-gpio "gpiopin=${THERMAL_GPIO_PIN}" 2>/dev/null; then
+          for _ in 1 2 3 4 5; do
+            if find /sys/bus/w1/devices -maxdepth 1 -name '28-*' -print -quit 2>/dev/null | grep -q .; then
+              THERMAL_DETECTED=1
+              break
+            fi
+            sleep 1
+          done
+          # Leave the running system as we found it if nothing answered -
+          # this was never persisted to config.txt, so it wouldn't survive
+          # a reboot anyway, but no reason to leave it polling until then.
+          [ "$THERMAL_DETECTED" -eq 0 ] && dtoverlay -r w1-gpio 2>/dev/null
+        fi
+      fi
+
+      if [ "$THERMAL_DETECTED" -eq 1 ]; then
+        echo "Found DS18B20 sensor on GPIO${THERMAL_GPIO_PIN} - persisting 1-Wire overlay."
+        if [ -n "$CONFIG_TXT" ] && ! grep -qxF "dtoverlay=w1-gpio,gpiopin=${THERMAL_GPIO_PIN}" "$CONFIG_TXT"; then
           # Leading newline guards against config.txt's last existing line
-          # not ending in one - a bare ">> file" append would otherwise glue
-          # this onto the end of that line and silently corrupt both.
+          # not ending in one - a bare ">> file" append would otherwise
+          # glue this onto the end of that line and silently corrupt both.
           printf '\ndtoverlay=w1-gpio,gpiopin=%s\n' "${THERMAL_GPIO_PIN}" >> "$CONFIG_TXT"
-          echo "Added 1-Wire overlay on GPIO${THERMAL_GPIO_PIN} to ${CONFIG_TXT} - a reboot is needed for it to take effect."
+        fi
+        grep -qxF 'w1-gpio' /etc/modules || printf '\nw1-gpio\n' >> /etc/modules
+        grep -qxF 'w1-therm' /etc/modules || printf '\nw1-therm\n' >> /etc/modules
+        grep -qE '^thermal_sensor_present=' "${rtkbase_path}/settings.conf" \
+          && sudo -u "${RTKBASE_USER}" sed -i "s|^thermal_sensor_present=.*|thermal_sensor_present='1'|" "${rtkbase_path}/settings.conf"
+      elif command -v dtoverlay >/dev/null 2>&1; then
+        echo "No DS18B20 sensor detected on GPIO${THERMAL_GPIO_PIN} - leaving the 1-Wire overlay disabled (thermal_sensor_present stays '0'). Wire one up and rerun 'install.sh --detect-thermal' any time later."
+      elif [ -n "$CONFIG_TXT" ]; then
+        if ! grep -qxF "dtoverlay=w1-gpio,gpiopin=${THERMAL_GPIO_PIN}" "$CONFIG_TXT"; then
+          printf '\ndtoverlay=w1-gpio,gpiopin=%s\n' "${THERMAL_GPIO_PIN}" >> "$CONFIG_TXT"
+          echo "Added 1-Wire overlay on GPIO${THERMAL_GPIO_PIN} to ${CONFIG_TXT} - a reboot is needed for it to take effect. Run 'install.sh --detect-thermal' afterwards if a DS18B20 is wired."
         fi
         grep -qxF 'w1-gpio' /etc/modules || printf '\nw1-gpio\n' >> /etc/modules
         grep -qxF 'w1-therm' /etc/modules || printf '\nw1-therm\n' >> /etc/modules

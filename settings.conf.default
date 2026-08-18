@@ -276,10 +276,16 @@ thermal_gpio_pin='4'
 # rtkdashboard already falls back to the MPPT reading when no thermal.json
 # ever shows up for a station.
 #
-# The 1-Wire overlay only loads after a reboot, so this can't be
-# auto-detected during the initial install.sh run - after rebooting once,
-# run 'install.sh --detect-thermal' to scan for a DS18B20 and flip this to
-# '1' if one answers.
+# On Raspberry Pi, install.sh probes for a DS18B20 during the initial
+# install itself (dtoverlay can apply the 1-Wire overlay to the running
+# kernel immediately, no reboot needed) and sets this automatically - the
+# overlay only gets persisted to config.txt/etc/modules at all if one
+# actually answered, so a station with nothing wired never has the
+# kernel polling that GPIO pin in the first place. On boards without
+# dtoverlay (e.g. Armbian/Orange Pi), the overlay only loads after a
+# reboot, so detection there needs a manual 'install.sh --detect-thermal'
+# afterwards. Either way, wiring a sensor up after the fact just needs
+# that same command re-run.
 thermal_sensor_present='0'
 
 [web]
