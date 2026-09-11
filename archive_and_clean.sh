@@ -70,15 +70,25 @@ fi
 # runs on its own fixed schedule regardless of whether this script is still
 # uploading (it's a safety net "in case this script hangs" - see its own
 # service description), so a slow/flaky-network run can have its network cut
-# out from under it mid-upload. lte_off.sh already honors this same flag
-# (tools/lte_hold.sh uses it for the manual SSH override), so holding it here
-# just extends that same mechanism to our own run.
+# out from under it mid-upload. lte_off.sh already honors this same flag,
+# so holding it here just extends that same mechanism to our own run.
 #
-# Only release it if THIS run is the one that created it - a manual hold via
-# tools/lte_hold.sh must survive past this script finishing. The trap is a
-# safety net for abnormal exits (STEP 6 below releases it explicitly on the
-# normal path, before its own lte_off.sh call, so upload_window mode can
-# still power the modem off promptly once uploads are actually done).
+# This flag is ours alone - tools/lte_hold.sh/lte_release.sh's manual SSH
+# override uses a separate file (MANUAL_HOLD_FLAG), which lte_off.sh checks
+# independently. They used to share this one file, which meant a
+# manual hold requested while this script already owned the flag - the
+# common case, since by the time a human notices the modem is on and
+# manages to SSH in, this script has usually already started and already
+# created it - got silently deleted the moment this run finished, often
+# well before the human's session was done with it. Never reintroduce that
+# coupling: this block must only ever create/release its own flag.
+#
+# Only release it if THIS run is the one that created it - guards against a
+# second concurrent run (shouldn't normally happen, but costs nothing to
+# guard against) clearing the first one's hold out from under it. The trap
+# is a safety net for abnormal exits (STEP 6 below releases it explicitly
+# on the normal path, before its own lte_off.sh call, so upload_window mode
+# can still power the modem off promptly once uploads are actually done).
 LTE_HOLD_FLAG="/tmp/rtkbase_lte_hold"
 LTE_HOLD_CREATED_BY_US=0
 if [ ! -f "$LTE_HOLD_FLAG" ]; then
