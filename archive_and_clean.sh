@@ -258,7 +258,16 @@ done
 
 if [ ${#processed_files[@]} -gt 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of GNSS data to Google Drive..."
-    rclone move "./" "${GDRIVE_GNSS_REMOTE}" \
+    # Routed through _rclone_upload_or_warn like the other three sources
+    # (see its own comment above) rather than a bare `rclone move` - this
+    # was the one upload step that stayed silent on failure: STEP 5 below
+    # can tell *that* a sync failed (no "Moved"/"Copied" in the log) but
+    # never printed *why* (rate limit, auth, timeout...), since nothing
+    # tailed this step's own log before it got deleted at the end of this
+    # script regardless of outcome. Return value deliberately unused here -
+    # STEP 5's own log grep is still what decides per-file keep/delete,
+    # this only adds the missing journalctl visibility into why.
+    _rclone_upload_or_warn "$RCLONE_LOG_GNSS" "GNSS batch" move "./" "${GDRIVE_GNSS_REMOTE}" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --include "*.7z" \
@@ -269,8 +278,7 @@ if [ ${#processed_files[@]} -gt 0 ]; then
         --contimeout 30s \
         --retries 3 \
         --low-level-retries 10 \
-        --log-level INFO \
-        --log-file "$RCLONE_LOG_GNSS"
+        --log-level INFO
 else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
 fi
