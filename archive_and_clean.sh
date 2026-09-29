@@ -72,6 +72,17 @@ _rclone_upload_or_warn() {
     return 1
 }
 
+# Cheap reachability probe, independent of any rclone/Drive-specific
+# failure (auth expiry, API rate limit, corrupt rclone.conf) - used by
+# STEP 0 below to tell "the modem/network itself looks down" (worth
+# resetting the modem for) apart from "network is fine but something else
+# broke" (a reset would just interrupt a working connection for nothing).
+# 8.8.8.8 rather than a hostname - DNS itself being down is one of the
+# failure modes this needs to detect, so the probe can't depend on it.
+_network_reachable() {
+    ping -c 2 -W 5 8.8.8.8 >/dev/null 2>&1
+}
+
 # ============================================================
 # Main logic
 # ============================================================
@@ -125,26 +136,28 @@ trap release_lte_hold EXIT
 
 # ----------------- STEP 0: MODEM RESET AFTER PROLONGED FAILURE -----------------
 # If every source failed to upload for several cycles in a row, the modem
-# itself is a more likely culprit than any single upload's own transient
-# error - and a power-cycle here is cheap to try before someone eventually
-# notices and reboots the whole machine (which, on this tmpfs setup, also
-# destroys every trace of why it was stuck - see the module comment above
-# LOGS_DIR). Runs before STEP 1 rather than after this cycle's own uploads,
-# so a fixed modem gets to actually help this same cycle instead of only the
-# next one two hours later.
+# is *one* plausible culprit - but so is a token expiry, a Drive-side rate
+# limit, or a corrupt rclone.conf, none of which a power-cycle would fix,
+# and all of which it would still interrupt a perfectly working connection
+# for. _network_reachable() (see its own comment above) is what tells these
+# apart: only reset when the network genuinely looks down, not just because
+# uploads happen to be failing. Runs before STEP 1 rather than after this
+# cycle's own uploads, so a fixed modem gets to actually help this same
+# cycle instead of only the next one two hours later.
 #
-# Skips if a manual SSH hold is active - MANUAL_HOLD_FLAG means a human is
-# using this exact connection right now, and a surprise power-cycle would
-# kick them off. LTE_HOLD_FLAG (this script's own hold, just created above)
-# is irrelevant here - it says nothing about a human being present.
+# Skips the reset outright if a manual SSH hold is active - MANUAL_HOLD_FLAG
+# means a human is using this exact connection right now, and a surprise
+# power-cycle would kick them off. LTE_HOLD_FLAG (this script's own hold,
+# just created above) is irrelevant here - it says nothing about a human
+# being present.
 if [ "${lte_reset_after_failed_cycles:-0}" -gt 0 ] 2>/dev/null \
     && [ "$PRIOR_FAILED_CYCLES" -ge "${lte_reset_after_failed_cycles}" ] \
     && [ -n "${modem_at_port}" ]
 then
     if [ -f "$MANUAL_HOLD_FLAG" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} cycles in a row, but a manual SSH hold is active - skipping modem reset."
-    else
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} consecutive cycles - power-cycling the LTE modem before retrying..."
+    elif ! _network_reachable; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} consecutive cycles and the network is unreachable - power-cycling the LTE modem before retrying..."
         "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" \
             --port "${modem_at_port}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=0"
         sleep 5
@@ -154,6 +167,8 @@ then
         # STEP 1 below starts relying on it - a bare CFUN=1 returns long
         # before the modem has actually found a cell tower.
         sleep 15
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} consecutive cycles, but the network is reachable - probably not a modem problem, skipping reset."
     fi
 fi
 
