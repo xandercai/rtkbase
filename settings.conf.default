@@ -233,6 +233,31 @@ lte_schedule_mode='fixed_window'
 # longer than lte_on_before_minutes + how long uploads usually take.
 lte_online_minutes='10'
 
+# Consecutive archive_and_clean.sh cycles with zero successful uploads
+# across all four sources before it power-cycles the modem itself (AT+CFUN=0
+# then =1) ahead of its own next attempt, on the theory that a modem stuck
+# failing to register is a more likely cause than four unrelated upload
+# errors in a row. Skipped automatically while a manual SSH hold
+# (tools/lte_hold.sh) is active, so it never kicks a live session off mid-
+# use. 0 disables this. See [diagnostics] below for what happens if this
+# alone doesn't clear it up.
+lte_reset_after_failed_cycles='3'
+
+[diagnostics]
+# When uploads have failed this many *consecutive* cycles (see
+# lte_reset_after_failed_cycles above - keep this noticeably larger, so the
+# modem reset gets a fair chance to fix things on its own first),
+# archive_and_clean.sh dumps the current boot's entire journal to
+# <rtkbase>/logs/ - the one place on this machine that actually survives a
+# reboot (/var/log, /tmp and the data dir are all tmpfs, see
+# mount_tmpfs.sh). Repeats every this-many cycles for as long as the outage
+# continues, so the snapshot keeps getting refreshed rather than only ever
+# capturing the first few hours of what might turn into a multi-day outage.
+# Whoever eventually reboots the machine to clear a long-stuck connection
+# gets to see what was actually happening beforehand instead of losing it
+# to the very reboot that fixed it. 0 disables the dump.
+debug_dump_after_failed_cycles='6'
+
 [tailscale]
 # how often the tailscale/ssh watchdog checks connectivity, in minutes
 tailscale_watchdog_interval='5'

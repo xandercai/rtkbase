@@ -35,6 +35,26 @@ MPPT_TMP="/tmp/rtkbase_mppt_${HOSTNAME}.json"
 THERMAL_TMP="/tmp/rtkbase_thermal_${HOSTNAME}.json"
 TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
 
+# LOGS_DIR is the one place on this machine that actually survives a
+# reboot - /var/log, /tmp and the data dir are all tmpfs (see
+# mount_tmpfs.sh), so anything only written there is gone the moment
+# someone reboots a stuck machine to fix it, which is exactly the situation
+# STEP 0 and STEP 5b below exist to leave a trail through instead.
+LOGS_DIR="${BASEDIR}/logs"
+mkdir -p "${LOGS_DIR}"
+FAILURE_COUNT_FILE="${LOGS_DIR}/upload_failure_count"
+LTE_HOLD_FLAG="/tmp/rtkbase_lte_hold"
+MANUAL_HOLD_FLAG="/tmp/rtkbase_lte_hold_manual"
+
+# How many consecutive prior cycles had zero successful uploads across all
+# four sources (see any_upload_succeeded below) - read once up front so
+# STEP 0 can act on it before this cycle's own uploads run, not just record
+# it after the fact. A missing/non-numeric file (first run ever, or a
+# corrupted write) is treated as "0 prior failures" rather than aborting.
+PRIOR_FAILED_CYCLES=$(cat "$FAILURE_COUNT_FILE" 2>/dev/null || echo 0)
+[[ "$PRIOR_FAILED_CYCLES" =~ ^[0-9]+$ ]] || PRIOR_FAILED_CYCLES=0
+any_upload_succeeded=0
+
 # Runs an rclone upload; on failure, prints the tail of its own log so the
 # real error (rate limit, auth, timeout...) lands in journalctl instead of
 # vanishing - rclone's --log-file writes to a local file, not stdout, and
@@ -89,7 +109,8 @@ fi
 # is a safety net for abnormal exits (STEP 6 below releases it explicitly
 # on the normal path, before its own lte_off.sh call, so upload_window mode
 # can still power the modem off promptly once uploads are actually done).
-LTE_HOLD_FLAG="/tmp/rtkbase_lte_hold"
+# (LTE_HOLD_FLAG itself is defined further up, alongside MANUAL_HOLD_FLAG,
+# since STEP 0 below needs both before this block runs.)
 LTE_HOLD_CREATED_BY_US=0
 if [ ! -f "$LTE_HOLD_FLAG" ]; then
     touch "$LTE_HOLD_FLAG"
@@ -101,6 +122,40 @@ release_lte_hold() {
     fi
 }
 trap release_lte_hold EXIT
+
+# ----------------- STEP 0: MODEM RESET AFTER PROLONGED FAILURE -----------------
+# If every source failed to upload for several cycles in a row, the modem
+# itself is a more likely culprit than any single upload's own transient
+# error - and a power-cycle here is cheap to try before someone eventually
+# notices and reboots the whole machine (which, on this tmpfs setup, also
+# destroys every trace of why it was stuck - see the module comment above
+# LOGS_DIR). Runs before STEP 1 rather than after this cycle's own uploads,
+# so a fixed modem gets to actually help this same cycle instead of only the
+# next one two hours later.
+#
+# Skips if a manual SSH hold is active - MANUAL_HOLD_FLAG means a human is
+# using this exact connection right now, and a surprise power-cycle would
+# kick them off. LTE_HOLD_FLAG (this script's own hold, just created above)
+# is irrelevant here - it says nothing about a human being present.
+if [ "${lte_reset_after_failed_cycles:-0}" -gt 0 ] 2>/dev/null \
+    && [ "$PRIOR_FAILED_CYCLES" -ge "${lte_reset_after_failed_cycles}" ] \
+    && [ -n "${modem_at_port}" ]
+then
+    if [ -f "$MANUAL_HOLD_FLAG" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} cycles in a row, but a manual SSH hold is active - skipping modem reset."
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} consecutive cycles - power-cycling the LTE modem before retrying..."
+        "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" \
+            --port "${modem_at_port}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=0"
+        sleep 5
+        "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" \
+            --port "${modem_at_port}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=1"
+        # Give the modem a moment to re-register with the network before
+        # STEP 1 below starts relying on it - a bare CFUN=1 returns long
+        # before the modem has actually found a cell tower.
+        sleep 15
+    fi
+fi
 
 # Upload order deliberately puts the small, no-retry-if-missed sources
 # (MPPT/thermal/journal - one-shot snapshots; a failed upload here is just
@@ -126,7 +181,7 @@ if [ -n "${mppt_port}" ]; then
         > "${MPPT_TMP}"
     then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT snapshot to Google Drive..."
-        _rclone_upload_or_warn "$RCLONE_LOG_MPPT" "MPPT snapshot" copyto "${MPPT_TMP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt.json" \
+        if _rclone_upload_or_warn "$RCLONE_LOG_MPPT" "MPPT snapshot" copyto "${MPPT_TMP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt.json" \
             --config "${RCLONE_CONF_TMP}" \
             --no-update-modtime \
             --timeout 60s \
@@ -134,6 +189,9 @@ if [ -n "${mppt_port}" ]; then
             --retries 3 \
             --low-level-retries 10 \
             --log-level INFO
+        then
+            any_upload_succeeded=1
+        fi
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: MPPT read failed, skipping upload."
     fi
@@ -152,7 +210,7 @@ if [ -s "${POWER_SAMPLES}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT load power samples..."
     POWER_SAMPLES_SNAP="${POWER_SAMPLES}.uploading"
     mv "${POWER_SAMPLES}" "${POWER_SAMPLES_SNAP}"
-    _rclone_upload_or_warn "$RCLONE_LOG_MPPT" "MPPT load power samples" copyto "${POWER_SAMPLES_SNAP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt_power.csv" \
+    if _rclone_upload_or_warn "$RCLONE_LOG_MPPT" "MPPT load power samples" copyto "${POWER_SAMPLES_SNAP}" "${GDRIVE_MPPT_REMOTE}/${TIMESTAMP}_${HOSTNAME}_mppt_power.csv" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --timeout 60s \
@@ -160,6 +218,9 @@ if [ -s "${POWER_SAMPLES}" ]; then
         --retries 3 \
         --low-level-retries 10 \
         --log-level INFO
+    then
+        any_upload_succeeded=1
+    fi
     rm -f "${POWER_SAMPLES_SNAP}"
 fi
 
@@ -174,7 +235,7 @@ if [ "${thermal_sensor_present:-0}" = "1" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
     if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
-        _rclone_upload_or_warn "$RCLONE_LOG_THERMAL" "Thermal snapshot" copyto "${THERMAL_TMP}" "${GDRIVE_THERMAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_thermal.json" \
+        if _rclone_upload_or_warn "$RCLONE_LOG_THERMAL" "Thermal snapshot" copyto "${THERMAL_TMP}" "${GDRIVE_THERMAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_thermal.json" \
             --config "${RCLONE_CONF_TMP}" \
             --no-update-modtime \
             --timeout 60s \
@@ -182,6 +243,9 @@ if [ "${thermal_sensor_present:-0}" = "1" ]; then
             --retries 3 \
             --low-level-retries 10 \
             --log-level INFO
+        then
+            any_upload_succeeded=1
+        fi
     else
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: thermal sensor read failed, skipping upload."
     fi
@@ -222,7 +286,7 @@ fi
 
 if [ -f "${JOURNAL_TMP}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading journal log to Google Drive..."
-    _rclone_upload_or_warn "$RCLONE_LOG_JOURNAL" "Journal log" copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
+    if _rclone_upload_or_warn "$RCLONE_LOG_JOURNAL" "Journal log" copyto "${JOURNAL_TMP}" "${GDRIVE_JOURNAL_REMOTE}/${TIMESTAMP}_${HOSTNAME}_journal.log" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --timeout 60s \
@@ -230,6 +294,9 @@ if [ -f "${JOURNAL_TMP}" ]; then
         --retries 3 \
         --low-level-retries 10 \
         --log-level INFO
+    then
+        any_upload_succeeded=1
+    fi
     rm -f "${JOURNAL_TMP}"
 fi
 
@@ -264,10 +331,12 @@ if [ ${#processed_files[@]} -gt 0 ]; then
     # can tell *that* a sync failed (no "Moved"/"Copied" in the log) but
     # never printed *why* (rate limit, auth, timeout...), since nothing
     # tailed this step's own log before it got deleted at the end of this
-    # script regardless of outcome. Return value deliberately unused here -
-    # STEP 5's own log grep is still what decides per-file keep/delete,
-    # this only adds the missing journalctl visibility into why.
-    _rclone_upload_or_warn "$RCLONE_LOG_GNSS" "GNSS batch" move "./" "${GDRIVE_GNSS_REMOTE}" \
+    # script regardless of outcome. The return value only feeds
+    # any_upload_succeeded below (STEP 0/5b's failure accounting) - STEP 5's
+    # own log grep is still what decides per-file keep/delete, since a
+    # partial "some files moved, some didn't" outcome is still a success
+    # here but needs the finer-grained per-file check there.
+    if _rclone_upload_or_warn "$RCLONE_LOG_GNSS" "GNSS batch" move "./" "${GDRIVE_GNSS_REMOTE}" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
         --include "*.7z" \
@@ -279,6 +348,9 @@ if [ ${#processed_files[@]} -gt 0 ]; then
         --retries 3 \
         --low-level-retries 10 \
         --log-level INFO
+    then
+        any_upload_succeeded=1
+    fi
 else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
 fi
@@ -300,6 +372,43 @@ if [ ${#processed_files[@]} -gt 0 ]; then
 fi
 
 rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_THERMAL"
+
+# ----------------- STEP 5b: FAILURE ACCOUNTING + FORENSIC DUMP -----------------
+# any_upload_succeeded is set by STEP 1/1b/2/3/4 above the moment any single
+# source gets through - a run that only fails GNSS but still gets its small
+# MPPT/journal snapshots out doesn't count as "everything is down" the way
+# an all-four-failed run does, and STEP 0 above already only fires on the
+# latter case.
+if [ "$any_upload_succeeded" -eq 1 ]; then
+    if [ "$PRIOR_FAILED_CYCLES" -gt 0 ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads succeeded again after ${PRIOR_FAILED_CYCLES} failed cycle(s)."
+    fi
+    echo 0 > "$FAILURE_COUNT_FILE"
+else
+    failed_cycles=$((PRIOR_FAILED_CYCLES + 1))
+    echo "$failed_cycles" > "$FAILURE_COUNT_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: every upload source failed this cycle (${failed_cycles} in a row)."
+
+    # Dumps the whole current boot's journal, not just this cycle's own
+    # --since window - the point is to capture however this outage actually
+    # started, which could be hours or days back, and everything since boot
+    # is still sitting in memory regardless (journald only loses it on the
+    # *next* reboot, which is usually exactly what someone reaches for once
+    # they notice a station has been stuck this long - see LOGS_DIR above).
+    # Re-dumps every debug_dump_after_failed_cycles cycles for as long as
+    # the outage continues, rather than only once, so a multi-day outage
+    # still ends with a recent snapshot instead of just its first few hours.
+    dump_every="${debug_dump_after_failed_cycles:-0}"
+    if [ "$dump_every" -gt 0 ] 2>/dev/null && [ $((failed_cycles % dump_every)) -eq 0 ]; then
+        dump_file="${LOGS_DIR}/stuck_${TIMESTAMP}.log.gz"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Still stuck after ${failed_cycles} cycles - dumping this boot's journal to ${dump_file} in case a reboot is needed before it clears up."
+        journalctl -b --no-pager 2>/dev/null | gzip > "$dump_file"
+        # Keep this from growing unbounded across repeat/older outages -
+        # any single dump is enough forensic value on its own, so age is
+        # the only thing that decides which ones are still worth keeping.
+        find "${LOGS_DIR}" -maxdepth 1 -name 'stuck_*.log.gz' -mtime +14 -delete
+    fi
+fi
 
 # ----------------- STEP 6: LTE MODEM POWER-SAVING (upload_window mode) -----------------
 # lte_modem_off.timer always turns the modem off at the fixed
