@@ -9,7 +9,6 @@ Type=oneshot
 # the whole script killed mid-run regardless of step order.
 TimeoutStartSec=10min
 User={user}
-# ExecStartPre=+/bin/bash {script_path}/update_timer.sh
 # ExecStartPre=/bin/sleep 120
 ExecStart={script_path}/archive_and_clean.sh
 # ReadWritePaths={script_path}

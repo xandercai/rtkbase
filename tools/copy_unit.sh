@@ -63,6 +63,26 @@ FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "$conf_file" | cut -d"'" -f2)
 # if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
+# The timers below sit on a fixed wall-clock grid ("every N hours from
+# 00:00"), which only lines up with str2str's N-hour file rotation when N
+# divides 24 - anything else (5, 7, a decimal like 0.1) used to produce an
+# invalid or irregular OnCalendar expression, silently breaking uploads.
+case "$FILE_ROTATE_TIME" in
+  0|1|2|3|4|6|8|12|24) ;;
+  *)
+    echo "Error: file_rotate_time='${FILE_ROTATE_TIME}' in ${conf_file} is not supported."
+    echo "Use one of 1, 2, 3, 4, 6, 8, 12 or 24 (hours)."
+    exit 1
+    ;;
+esac
+
+# Placeholder substitutions for the unit templates below. They're applied
+# while copying to /etc/systemd/system, never to the templates under unit/
+# themselves: editing those in place meant the first install consumed the
+# {{...}} placeholders, so any later settings change + reinstall silently
+# kept the old schedule.
+TEMPLATE_SUBST=()
+
 # upload every 1 hour
 if [ "$FILE_ROTATE_TIME" -eq 1 ] || [ "$FILE_ROTATE_TIME" -eq 0 ]; then
     FILE_ROTATE_INTERVAL="*-*-* *:01:02"
@@ -81,12 +101,11 @@ if [ -z "$INIT_TIME" ]; then INIT_TIME=5; fi
 
 # dynamic modify timer ini
 echo 'Configue rtkbase_archive.timer.ROTATE_INTERVAL = ' "$FILE_ROTATE_INTERVAL"
-# sed -i "s/{{ROTATE_INTERVAL}}/${FILE_ROTATE_INTERVAL}/g" "${BASEDIR}/unit/rtkbase_archive.timer"
-# "/" may not work if use "*-*-* */${FILE_ROTATE_TIME}:01:02"
-sed -i "s|{{ROTATE_INTERVAL}}|${FILE_ROTATE_INTERVAL}|g" "${BASEDIR}/unit/rtkbase_archive.timer"
+# "/" appears in the calendar expression, so use "|" as the sed delimiter
+TEMPLATE_SUBST+=(-e "s|{{ROTATE_INTERVAL}}|${FILE_ROTATE_INTERVAL}|g")
 
 echo 'Configue rtkbase_archive.timer.INITIAL_TIME = ' "$INIT_TIME"
-sed -i "s/{{INITIAL_TIME}}/${INIT_TIME}min/g" "${BASEDIR}/unit/rtkbase_archive.timer"
+TEMPLATE_SUBST+=(-e "s/{{INITIAL_TIME}}/${INIT_TIME}min/g")
 
 # dynamic modify lte_modem_on.timer: fire N minutes before every
 # rtkbase_archive.timer run, on the same wall-clock grid (built from the
@@ -120,10 +139,10 @@ fi
 
 echo 'Configue lte_modem_on.timer.LTE_ON_CALENDAR = ' "$LTE_ON_CALENDAR"
 # "/" appears in the calendar expression, so use "|" as the sed delimiter
-sed -i "s|{{LTE_ON_CALENDAR}}|${LTE_ON_CALENDAR}|g" "${BASEDIR}/unit/lte_modem_on.timer"
+TEMPLATE_SUBST+=(-e "s|{{LTE_ON_CALENDAR}}|${LTE_ON_CALENDAR}|g")
 
 echo 'Configue lte_modem_on.timer.LTE_ON_BOOT_SEC = ' "$LTE_ON_BOOT_SEC"
-sed -i "s/{{LTE_ON_BOOT_SEC}}/${LTE_ON_BOOT_SEC}/g" "${BASEDIR}/unit/lte_modem_on.timer"
+TEMPLATE_SUBST+=(-e "s/{{LTE_ON_BOOT_SEC}}/${LTE_ON_BOOT_SEC}/g")
 
 # dynamic modify lte_modem_off.timer: fire a fixed lte_online_minutes after
 # lte_modem_on.timer, regardless of how long archive_and_clean.sh actually
@@ -149,10 +168,10 @@ fi
 LTE_OFF_BOOT_SEC="${LTE_OFF_BOOT_MIN}min"
 
 echo 'Configue lte_modem_off.timer.LTE_OFF_CALENDAR = ' "$LTE_OFF_CALENDAR"
-sed -i "s|{{LTE_OFF_CALENDAR}}|${LTE_OFF_CALENDAR}|g" "${BASEDIR}/unit/lte_modem_off.timer"
+TEMPLATE_SUBST+=(-e "s|{{LTE_OFF_CALENDAR}}|${LTE_OFF_CALENDAR}|g")
 
 echo 'Configue lte_modem_off.timer.LTE_OFF_BOOT_SEC = ' "$LTE_OFF_BOOT_SEC"
-sed -i "s/{{LTE_OFF_BOOT_SEC}}/${LTE_OFF_BOOT_SEC}/g" "${BASEDIR}/unit/lte_modem_off.timer"
+TEMPLATE_SUBST+=(-e "s/{{LTE_OFF_BOOT_SEC}}/${LTE_OFF_BOOT_SEC}/g")
 
 # dynamic modify mppt_charge_guard.timer
 MPPT_GUARD_CHECK=$(grep '^mppt_charge_check_minutes=' "$conf_file" | cut -d"'" -f2)
@@ -173,10 +192,10 @@ MPPT_GUARD_BOOT_DELAY=$(grep '^mppt_charge_guard_boot_delay=' "$conf_file" | cut
 if [ -z "$MPPT_GUARD_BOOT_DELAY" ]; then MPPT_GUARD_BOOT_DELAY=2; fi
 
 echo 'Configue mppt_charge_guard.timer.MPPT_GUARD_CALENDAR = ' "$MPPT_GUARD_CALENDAR"
-sed -i "s|{{MPPT_GUARD_CALENDAR}}|${MPPT_GUARD_CALENDAR}|g" "${BASEDIR}/unit/mppt_charge_guard.timer"
+TEMPLATE_SUBST+=(-e "s|{{MPPT_GUARD_CALENDAR}}|${MPPT_GUARD_CALENDAR}|g")
 
 echo 'Configue mppt_charge_guard.timer.MPPT_GUARD_BOOT_DELAY = ' "${MPPT_GUARD_BOOT_DELAY}min"
-sed -i "s/{{MPPT_GUARD_BOOT_DELAY}}/${MPPT_GUARD_BOOT_DELAY}min/g" "${BASEDIR}/unit/mppt_charge_guard.timer"
+TEMPLATE_SUBST+=(-e "s/{{MPPT_GUARD_BOOT_DELAY}}/${MPPT_GUARD_BOOT_DELAY}min/g")
 
 # dynamic modify tailscale_watchdog.timer
 TS_WATCHDOG_INTERVAL=$(grep '^tailscale_watchdog_interval=' "$conf_file" | cut -d"'" -f2)
@@ -199,10 +218,10 @@ if [ -z "$TS_WATCHDOG_BOOT_DELAY" ]; then TS_WATCHDOG_BOOT_DELAY=2; fi
 
 echo 'Configue tailscale_watchdog.timer.TS_WATCHDOG_INTERVAL = ' "$TS_WATCHDOG_CALENDAR"
 # "/" appears in the calendar expression, so use "|" as the sed delimiter
-sed -i "s|{{TS_WATCHDOG_INTERVAL}}|${TS_WATCHDOG_CALENDAR}|g" "${BASEDIR}/unit/tailscale_watchdog.timer"
+TEMPLATE_SUBST+=(-e "s|{{TS_WATCHDOG_INTERVAL}}|${TS_WATCHDOG_CALENDAR}|g")
 
 echo 'Configue tailscale_watchdog.timer.TS_WATCHDOG_BOOT_DELAY = ' "${TS_WATCHDOG_BOOT_DELAY}min"
-sed -i "s/{{TS_WATCHDOG_BOOT_DELAY}}/${TS_WATCHDOG_BOOT_DELAY}min/g" "${BASEDIR}/unit/tailscale_watchdog.timer"
+TEMPLATE_SUBST+=(-e "s/{{TS_WATCHDOG_BOOT_DELAY}}/${TS_WATCHDOG_BOOT_DELAY}min/g")
 # <-xcai
 
 
@@ -215,7 +234,7 @@ for file_path in "${BASEDIR}"/unit/*.service "${BASEDIR}"/unit/*.timer
     do
         file_name=$(basename "${file_path}")
         echo copying "${file_name}"
-        sed -e 's|{script_path}|'"$(dirname "$(dirname "$(readlink -f "$0")")")"'|' -e 's|{user}|'"${ARG_USER}"'|' -e 's|{python_path}|'"${ARG_PYPATH}"'|' "${file_path}" > /etc/systemd/system/"${file_name}"
+        sed -e 's|{script_path}|'"$(dirname "$(dirname "$(readlink -f "$0")")")"'|' -e 's|{user}|'"${ARG_USER}"'|' -e 's|{python_path}|'"${ARG_PYPATH}"'|' "${TEMPLATE_SUBST[@]}" "${file_path}" > /etc/systemd/system/"${file_name}"
     done
 
 systemctl daemon-reload
