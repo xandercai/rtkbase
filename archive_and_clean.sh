@@ -385,7 +385,7 @@ pending_archives=( *.7z )
 # before that instead of having them cut off mid-file; whatever is left
 # simply goes next cycle. Doesn't apply when the client is on WiFi.
 gnss_deadline_flags=()
-uplink_dev=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \K\S+')
+uplink_dev=$(ip route get 8.8.8.8 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
 if [ "$NETWORK_ROLE" = "client" ] && [ "$uplink_dev" = "eth0" ] && [ ${#pending_archives[@]} -gt 0 ]; then
     window_s=$(( (${lte_online_minutes:-10} - ${lte_on_before_minutes:-2} - 1) * 60 ))
     remaining_s=$(( window_s - ($(date +%s) - SCRIPT_START) ))
@@ -484,7 +484,7 @@ else
     fi
 fi
 
-# ----------------- STEP 6: LTE MODEM POWER-SAVING (upload_window mode) -----------------
+# ----------------- STEP 6: LTE MODEM POWER-SAVING -----------------
 # lte_modem_off.timer always turns the modem off at the fixed
 # lte_online_minutes deadline (see settings.conf [lte]) - that's the only
 # off-trigger in fixed_window mode, and a safety net here too in case this
@@ -501,8 +501,19 @@ fi
 # client Pi behind it may still be uploading, and this script can't see
 # that. lte_modem_off.timer's fixed deadline - which the client's own
 # upload deadline is computed against - still applies.
+#
+# Either mode: if this run outlasted that deadline, lte_modem_off.timer has
+# already fired while our hold was set and skipped the power-off - and it
+# won't fire again until the next cycle, so without this the modem stayed
+# on for a whole extra rotation period. Switch it off now instead.
+# (The deadline is lte_online_minutes after lte_modem_on.timer, which fires
+# lte_on_before_minutes before this run starts - see tools/copy_unit.sh.)
 release_lte_hold
-if [ "${lte_schedule_mode:-fixed_window}" = "upload_window" ]; then
+lte_deadline=$(( SCRIPT_START + (${lte_online_minutes:-10} - ${lte_on_before_minutes:-2}) * 60 ))
+if [ -n "${MODEM_PORT}" ] && [ "$(date +%s)" -ge "$lte_deadline" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - This run outlasted the LTE online window (lte_online_minutes=${lte_online_minutes:-10}), switching the modem off now..."
+    bash "${BASEDIR}/tools/lte_off.sh"
+elif [ "${lte_schedule_mode:-fixed_window}" = "upload_window" ]; then
     if [ "$NETWORK_ROLE" = "master" ] && nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx 'lte-share-eth0'; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done, but LTE is shared with a client Pi - leaving the modem on until the fixed lte_online_minutes deadline."
     else

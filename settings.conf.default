@@ -285,6 +285,10 @@ debug_dump_after_failed_cycles='6'
 tailscale_watchdog_interval='5'
 # delay after boot before the first watchdog check, in minutes
 tailscale_watchdog_boot_delay='2'
+# the exact flags this station was first brought up with ("sudo tailscale
+# up --ssh" -> '--ssh'). The watchdog's own recovery "tailscale up" must
+# repeat them, or Tailscale rejects it and never reconnects.
+tailscale_up_flags=''
 
 [mppt]
 # EPEVER Tracer RS485-USB adapter. '' (or 'auto') = use /dev/epever485
