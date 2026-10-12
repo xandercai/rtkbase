@@ -248,9 +248,10 @@ lte_reset_after_failed_cycles='3'
 # lte_reset_after_failed_cycles above - keep this noticeably larger, so the
 # modem reset gets a fair chance to fix things on its own first),
 # archive_and_clean.sh dumps the current boot's entire journal to
-# <rtkbase>/logs/ - the one place on this machine that actually survives a
-# reboot (/var/log, /tmp and the data dir are all tmpfs, see
-# mount_tmpfs.sh). Repeats every this-many cycles for as long as the outage
+# <rtkbase>/logs/ on the SD card. The systemd journal itself is persistent
+# too (see mount_tmpfs.sh) but capped at 50 MB, so on a multi-day outage
+# its oldest part rotates away - this dump keeps a copy. Repeats every
+# this-many cycles for as long as the outage
 # continues, so the snapshot keeps getting refreshed rather than only ever
 # capturing the first few hours of what might turn into a multi-day outage.
 # Whoever eventually reboots the machine to clear a long-stuck connection

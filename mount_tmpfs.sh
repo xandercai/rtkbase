@@ -1,98 +1,64 @@
 #!/bin/bash
 # =====================================================================
-# RTKBase Standalone RAM Disk (tmpfs) Configuration Script
-# Must be executed as root after installation and before rebooting:
-# sudo ./mount_tmpfs.sh
+# RTKBase RAM disk (tmpfs) + persistent journal configuration
+# Must be executed as root after installation, then reboot:
+#   sudo ./mount_tmpfs.sh && sudo reboot
+#
+# What goes where:
+#   /tmp, /var/tmp   -> tmpfs (scratch files, rclone logs, MPPT samples)
+#   GNSS data dir    -> SD card. Data waiting for an LTE window has to
+#                       survive a brown-out or a reboot, and a multi-day
+#                       outage can need more than any RAM disk could hold.
+#   systemd journal  -> SD card, capped at 50 MB, so the reason a station
+#                       went dark is still there after it's power-cycled.
+#
+# Earlier versions also put /var/log on tmpfs (which lost every log at each
+# reboot) and tried to put the data dir on a 512 MB tmpfs (which, through a
+# bug, ended up mounted on an unused /data instead). Both entries are
+# removed from /etc/fstab here if present. Safe to run more than once.
 # =====================================================================
 
-# 1. Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
   echo "Error: Please run this script with sudo (sudo ./mount_tmpfs.sh)."
   exit 1
 fi
 
-# 2. Extract the original user who called sudo
-TARGET_USER="${SUDO_USER:-$USER}"
-
-# If the target user is still root, abort the script immediately to avoid path corruption
-if [ "$TARGET_USER" = "root" ]; then
-    echo "Error: The identified user is 'root'."
-    echo "This can happen if you used 'sudo su' or executed the script directly as the root user."
-    echo "Please log in as a normal user (e.g., 'pi' or 'base') and run: sudo ./mount_tmpfs.sh"
-    exit 1
+# --- 1. drop the legacy /var/log and data-dir tmpfs entries ---------------
+if awk '$1=="tmpfs" && ($2=="/var/log" || $2=="/data" || $2 ~ /\/rtkbase\/data\/?$/) {found=1} END {exit !found}' /etc/fstab; then
+    cp /etc/fstab /etc/fstab.rtkbase.bak
+    awk '!($1=="tmpfs" && ($2=="/var/log" || $2=="/data" || $2 ~ /\/rtkbase\/data\/?$/))' /etc/fstab.rtkbase.bak > /etc/fstab
+    echo "Removed legacy /var/log and data-dir tmpfs entries from /etc/fstab (backup: /etc/fstab.rtkbase.bak)."
 fi
 
-# 3. Dynamically resolve paths using the parsed normal user
-USER_HOME=$(eval echo "~$TARGET_USER")
-RTKBASE_DIR="${USER_HOME}/rtkbase"
+# --- 2. /tmp and /var/tmp on tmpfs ---------------------------------------
+for mount_point in /tmp /var/tmp; do
+    if ! awk -v mp="$mount_point" '$1=="tmpfs" && $2==mp {found=1} END {exit !found}' /etc/fstab; then
+        echo "tmpfs ${mount_point} tmpfs defaults,noatime,mode=1777,size=100M 0 0" >> /etc/fstab
+        echo "Added tmpfs entry for ${mount_point}."
+    else
+        echo "tmpfs entry for ${mount_point} already present, skipping."
+    fi
+done
 
-SETTINGS_FILE="${RTKBASE_DIR}/settings.conf"
-DEFAULT_SETTINGS="${RTKBASE_DIR}/settings.conf.default"
-
-# 4. Extract the datadir variable
-if [ -f "$SETTINGS_FILE" ]; then
-    source <(grep -v '^#' "$SETTINGS_FILE" | grep 'datadir=')
-elif [ -f "$DEFAULT_SETTINGS" ]; then
-    source <(grep -v '^#' "$DEFAULT_SETTINGS" | grep 'datadir=')
-fi
-
-# 5. Handle fallback data paths safely
-if [ -z "$datadir" ]; then
-    DATA_DIR="${RTKBASE_DIR}/data"
-else
-    # Remove file:// URI scheme to extract pure local path
-    DATA_DIR=$(echo "$datadir" | sed 's|^file://||')
-fi
-
-# Extract UID and GID for permissions
-TARGET_UID=$(id -u "$TARGET_USER")
-TARGET_GID=$(id -g "$TARGET_USER")
-
-echo "======================================================="
-echo " Configuring RAM disks (tmpfs) for RTKBase..."
-echo " Normal User:       $TARGET_USER (UID: $TARGET_UID, GID: $TARGET_GID)"
-echo " Target Data Path:  $DATA_DIR"
-echo "======================================================="
-
-# 6. Append standard system caches to /etc/fstab
-if ! grep -q "tmpfs /tmp " /etc/fstab; then
-    echo "Adding system tmpfs configurations to /etc/fstab..."
-    cat << 'EOF' >> /etc/fstab
-tmpfs /tmp tmpfs defaults,noatime,mode=1777,size=100M 0 0
-tmpfs /var/log tmpfs defaults,noatime,mode=1777,size=100M 0 0
-tmpfs /var/tmp tmpfs defaults,noatime,mode=1777,size=100M 0 0
+# --- 3. persistent, size-capped systemd journal --------------------------
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/rtkbase.conf << 'EOF'
+# Written by rtkbase mount_tmpfs.sh: keep the journal across reboots so a
+# station's last hours before going dark can still be read afterwards,
+# while bounding SD card usage.
+[Journal]
+Storage=persistent
+SystemMaxUse=50M
+SystemMaxFileSize=10M
+SystemKeepFree=500M
 EOF
-    echo "System RAM disks appended."
-else
-    echo "System RAM disks already configured in /etc/fstab. Skipping."
-fi
+mkdir -p /var/log/journal
+systemd-tmpfiles --create --prefix /var/log/journal
+systemctl restart systemd-journald
+echo "Persistent journal enabled (max 50 MB) in /etc/systemd/journald.conf.d/rtkbase.conf."
 
-# 7. Create physical directories and set ownership
-if [ ! -d "$DATA_DIR" ]; then
-    echo "Creating directory: $DATA_DIR"
-    mkdir -p "$DATA_DIR"
-fi
-chown -R "${TARGET_USER}:${TARGET_USER}" "$DATA_DIR"
-chmod 775 "$DATA_DIR"
-
-# 8. Add the data directory tmpfs entry to /etc/fstab
-if ! grep -q "tmpfs $DATA_DIR " /etc/fstab; then
-    echo "Adding data folder tmpfs entry to /etc/fstab..."
-    # 512MB RAM storage linked to the exact user's UID and GID
-    echo "tmpfs $DATA_DIR tmpfs defaults,noatime,mode=0775,size=512M,uid=${TARGET_UID},gid=${TARGET_GID} 0 0" >> /etc/fstab
-    echo "Data directory RAM disk appended."
-else
-    echo "Data directory RAM disk already configured in /etc/fstab. Skipping."
-fi
-
-# 9. Activate mounting instantly
-echo "Activating all RAM disks..."
-mount -a
-
-# Output the result to verify
 echo "-------------------------------------------------------"
-echo " Current tmpfs Mounting Verification:"
-df -h | grep -E 'tmpfs|/tmp|/var/log|/var/tmp|data'
+echo " tmpfs entries in /etc/fstab:"
+awk '$1=="tmpfs"' /etc/fstab
 echo "-------------------------------------------------------"
-
-echo "Configuration completed successfully. You can now type 'sudo reboot'."
+echo "Configuration completed. Reboot to apply: sudo reboot"

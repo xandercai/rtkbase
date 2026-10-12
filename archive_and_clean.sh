@@ -7,7 +7,10 @@ if [ "$HOME" = "/root" ]; then
     exit 1
 fi
 
-BASEDIR="$(dirname "$0")"
+# Absolute, because the script cd's into the data dir further down: a
+# relative BASEDIR (e.g. a manual "./archive_and_clean.sh") then broke every
+# later ${BASEDIR}/... path - logs/, venv/, tools/.
+BASEDIR="$(cd "$(dirname "$0")" && pwd)"
 HOSTNAME=$(hostname)
 
 # Load configuration variables
@@ -35,11 +38,9 @@ MPPT_TMP="/tmp/rtkbase_mppt_${HOSTNAME}.json"
 THERMAL_TMP="/tmp/rtkbase_thermal_${HOSTNAME}.json"
 TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
 
-# LOGS_DIR is the one place on this machine that actually survives a
-# reboot - /var/log, /tmp and the data dir are all tmpfs (see
-# mount_tmpfs.sh), so anything only written there is gone the moment
-# someone reboots a stuck machine to fix it, which is exactly the situation
-# STEP 0 and STEP 5b below exist to leave a trail through instead.
+# LOGS_DIR is on the SD card, so it survives a reboot - unlike /tmp (tmpfs,
+# see mount_tmpfs.sh) - which is exactly what STEP 0 and STEP 5b below need
+# to leave a trail through a stuck machine someone eventually power-cycles.
 LOGS_DIR="${BASEDIR}/logs"
 mkdir -p "${LOGS_DIR}"
 FAILURE_COUNT_FILE="${LOGS_DIR}/upload_failure_count"
@@ -319,10 +320,15 @@ fi
 # ----------------- STEP 4: COMPRESSION + UPLOAD (GNSS raw data) -----------------
 # Deliberately last of the four upload sources - see the module-level
 # comment above STEP 1 for why (this is the one source that already
-# tolerates being late: STEP 5 below leaves an unsynced .ubx on disk to
-# retry next run, unlike the point-in-time snapshots above, which have no
-# such recovery if this run runs out of time or network).
-processed_files=()
+# tolerates being late: an unsynced .7z just stays on disk and is retried
+# next run, unlike the point-in-time snapshots above, which have no such
+# recovery if this run runs out of time or network).
+#
+# Each closed raw file is compressed once and the raw file deleted right
+# away; from then on the .7z is the only local copy, and rclone move
+# deletes it once it's on Drive. The raw file used to be kept until its
+# upload succeeded, so during an LTE outage every hour of data sat on the
+# SD card twice (raw + .7z) and was recompressed every cycle.
 
 # str2str_file names its output after receiver_format (run_cast.sh's
 # out_file): .ubx for the F9P, but .rtcm3 for the UM980 and .sbf for the
@@ -339,31 +345,37 @@ for file in *."${raw_ext}"; do
         # over 1 GB of RAM on a large file, which a Pi 3B+ doesn't have, and
         # it's several times slower - eating into the LTE online window -
         # for a few percent of size on already-dense raw GNSS data.
-        # -mmt=2 leaves the other cores to str2str. Output is kept (not
-        # sent to /dev/null) so a failure says why in journalctl.
-        if compress_output=$(7z a -t7z -m0=lzma2 -mx=5 -md=16m -mmt=2 "${file%.*}_${HOSTNAME}.7z" "$file" 2>&1); then
-            processed_files+=("$file")
+        # -mmt=2 leaves the other cores to str2str. -stl stamps the .7z with
+        # the raw file's own mtime, so STEP 5's "delete the oldest first"
+        # goes by recording time rather than by when it got compressed.
+        # Output is kept (not sent to /dev/null) so a failure says why in
+        # journalctl.
+        sevenz_name="${file%.*}_${HOSTNAME}.7z"
+        # a .7z left over from a run killed mid-compression would otherwise
+        # have this file appended into it as a second copy
+        rm -f "$sevenz_name"
+        if compress_output=$(7z a -t7z -m0=lzma2 -mx=5 -md=16m -mmt=2 -stl "$sevenz_name" "$file" 2>&1); then
+            rm -f "$file"
         else
-            echo "Compression failed for: $file"
-            echo "$compress_output" | tail -n 5 | sed 's/^/    /'
-            rm -f "${file%.*}_${HOSTNAME}.7z"
+            echo "Compression failed for: $file (keeping it for next run)" >&2
+            echo "$compress_output" | tail -n 5 | sed 's/^/    /' >&2
+            rm -f "$sevenz_name"
         fi
     fi
 done
 
-if [ ${#processed_files[@]} -gt 0 ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of GNSS data to Google Drive..."
+# Upload every pending .7z, including ones left over from earlier failed
+# runs - not only when this run happened to compress something new.
+pending_archives=( *.7z )
+[[ -e "${pending_archives[0]}" ]] || pending_archives=()
+
+if [ ${#pending_archives[@]} -gt 0 ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of ${#pending_archives[@]} GNSS archive(s) to Google Drive..."
     # Routed through _rclone_upload_or_warn like the other three sources
-    # (see its own comment above) rather than a bare `rclone move` - this
-    # was the one upload step that stayed silent on failure: STEP 5 below
-    # can tell *that* a sync failed (no "Moved"/"Copied" in the log) but
-    # never printed *why* (rate limit, auth, timeout...), since nothing
-    # tailed this step's own log before it got deleted at the end of this
-    # script regardless of outcome. The return value only feeds
-    # any_upload_succeeded below (STEP 0/5b's failure accounting) - STEP 5's
-    # own log grep is still what decides per-file keep/delete, since a
-    # partial "some files moved, some didn't" outcome is still a success
-    # here but needs the finer-grained per-file check there.
+    # (see its own comment above) so a failure says why (rate limit, auth,
+    # timeout...) in journalctl. rclone move only deletes a local .7z once
+    # that file is on Drive, so a partial failure just leaves the rest for
+    # the next run.
     if _rclone_upload_or_warn "$RCLONE_LOG_GNSS" "GNSS batch" move "./" "${GDRIVE_GNSS_REMOTE}" \
         --config "${RCLONE_CONF_TMP}" \
         --no-update-modtime \
@@ -383,20 +395,25 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
 fi
 
-# ----------------- STEP 5: CLEANUP -----------------
-# Only the GNSS upload's own log decides whether local raw sources are safe
-# to delete - it must never be influenced by the other three sources.
-if [ ${#processed_files[@]} -gt 0 ]; then
-    echo "Cleaning up local raw source files (.${raw_ext})..."
-    for file in "${processed_files[@]}"; do
-        sevenz_name="${file%.*}_${HOSTNAME}.7z"
-        if [ ! -f "$sevenz_name" ] && grep -q -E "Moved|Copied" "$RCLONE_LOG_GNSS" 2>/dev/null; then
-            echo "Sync successfully, delete source file: $file"
-            rm -f "$file"
-        else
-            echo "Sync failed, keeping source file for next run: $file"
-        fi
-    done
+# ----------------- STEP 5: FREE-SPACE GUARD -----------------
+# During a long LTE outage nothing leaves the station, and a full SD card
+# stops str2str from writing anything at all (and destabilises the rest of
+# the system with it). Below min_free_space MB, drop the OLDEST pending
+# archives first, so the newest data and the file being recorded right now
+# survive. Every deletion is logged to stderr so it shows up as an error.
+min_free_mb="${min_free_space:-500}"
+if [[ "$min_free_mb" =~ ^[0-9]+$ ]] && [ "$min_free_mb" -gt 0 ]; then
+    free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
+    if [[ "$free_mb" =~ ^[0-9]+$ ]] && [ "$free_mb" -lt "$min_free_mb" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: only ${free_mb} MB free (< ${min_free_mb} MB), deleting oldest un-uploaded GNSS archives." >&2
+        while [ "$free_mb" -lt "$min_free_mb" ]; do
+            oldest=$(ls -1tr -- *.7z 2>/dev/null | head -n 1)
+            [ -n "$oldest" ] || break
+            echo "    deleting un-uploaded archive to free space: $oldest" >&2
+            rm -f -- "$oldest"
+            free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
+        done
+    fi
 fi
 
 rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_THERMAL"
