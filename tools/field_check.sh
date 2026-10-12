@@ -1,14 +1,7 @@
 #!/bin/bash
-# Pre-deployment self-check. Run it on site before driving out, while the
-# station still has WiFi, as the rtkbase user:
-#
+# Pre-deployment check, run as the rtkbase user while still on WiFi:
 #   ~/rtkbase/tools/field_check.sh
-#
-# Everything a station needs to work unattended once powered up in the
-# field is checked here, so problems surface while they are still a
-# one-minute fix: GNSS logging, time sync, LTE/role, Drive upload auth,
-# Tailscale login (and key expiry), MPPT, storage, power supply.
-# Read-only: it changes nothing. Exit code = number of FAILs.
+# Read-only. Exit code = number of FAILs.
 
 BASEDIR="$(cd "$(dirname "$0")/.." && pwd)"
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )

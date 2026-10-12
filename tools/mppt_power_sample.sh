@@ -20,10 +20,7 @@ mppt_port=$(resolve_mppt_port) || exit 0
 
 SAMPLE_FILE="/tmp/rtkbase_mppt_power_$(hostname).csv"
 
-# Same lock as mppt_charge_guard.sh / archive_and_clean.sh: the timers are
-# offset from each other, but AccuracySec and run time can still make them
-# overlap on the shared RS485 adapter. A sample that can't get the port
-# within a few seconds is simply skipped.
+# shared RS485 port lock; skip this sample if busy
 flock -w 5 /run/lock/rtkbase_epever485.lock \
 "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/mppt_read.py" \
     --port "${mppt_port}" --baudrate "${mppt_baudrate:-115200}" --slave-id "${mppt_slave_id:-1}" \

@@ -4,21 +4,13 @@
 # Must be executed as root after installation, then reboot:
 #   sudo ./mount_tmpfs.sh && sudo reboot
 #
-# What goes where:
-#   GNSS data dir    -> tmpfs, ram_data_max_mb (settings.conf). Recording
-#                       and compression happen in RAM to spare the SD card.
-#   overflow_dir     -> SD card. Archives still waiting for upload move
-#                       here only when they no longer fit in RAM, and this
-#                       directory is capped too (see archive_and_clean.sh).
-#   /tmp, /var/tmp   -> tmpfs (scratch files, rclone logs, MPPT samples)
-#   systemd journal  -> SD card, capped at 50 MB, so the reason a station
-#                       went dark is still there after it's power-cycled.
+#   GNSS data dir   -> tmpfs (ram_data_max_mb)
+#   overflow_dir    -> SD card, used by archive_and_clean.sh when RAM is full
+#   /tmp, /var/tmp  -> tmpfs
+#   systemd journal -> SD card, max 50 MB
 #
-# Earlier versions put /var/log on tmpfs (losing every log at each reboot),
-# and resolved the data dir from settings.conf without defining $BASEDIR,
-# so on a fresh settings.conf the tmpfs landed on an unused /data. Both are
-# cleaned out of /etc/fstab here. Safe to run more than once - e.g. after
-# changing ram_data_max_mb.
+# Also removes the old /var/log and /data tmpfs entries. Safe to re-run,
+# e.g. after changing ram_data_max_mb.
 # =====================================================================
 
 if [ "$EUID" -ne 0 ]; then
@@ -39,8 +31,7 @@ RTKBASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 SETTINGS_FILE="${RTKBASE_DIR}/settings.conf"
 [ -f "$SETTINGS_FILE" ] || SETTINGS_FILE="${RTKBASE_DIR}/settings.conf.default"
 
-# Same evaluation the other scripts use, with BASEDIR actually defined
-# (datadir is '$BASEDIR/data' until the settings merge expands it).
+# datadir may still be '$BASEDIR/data'
 BASEDIR="${RTKBASE_DIR}"
 source <( grep -v '^#' "$SETTINGS_FILE" | grep -E '^(datadir|overflow_dir|ram_data_max_mb)=' )
 DATA_DIR="${datadir:-${RTKBASE_DIR}/data}"
@@ -73,9 +64,8 @@ echo "fstab updated (backup: /etc/fstab.rtkbase.bak)."
 
 # --- 3. data dir + SD overflow dir ----------------------------------------
 mkdir -p "$DATA_DIR" "$OVERFLOW_DIR"
-# Anything already recorded on the SD card under the data dir would be
-# hidden once the tmpfs is mounted over it: hand it to the overflow dir,
-# from where archive_and_clean.sh uploads it like any other pending data.
+# files already in the data dir on the SD card would be hidden by the
+# tmpfs: move them to the overflow dir, they get uploaded from there
 if ! mountpoint -q "$DATA_DIR"; then
     shopt -s nullglob
     leftovers=( "$DATA_DIR"/* )
@@ -91,9 +81,7 @@ chmod 775 "$DATA_DIR" "$OVERFLOW_DIR"
 # --- 4. persistent, size-capped systemd journal ---------------------------
 mkdir -p /etc/systemd/journald.conf.d
 cat > /etc/systemd/journald.conf.d/rtkbase.conf << 'EOF'
-# Written by rtkbase mount_tmpfs.sh: keep the journal across reboots so a
-# station's last hours before going dark can still be read afterwards,
-# while bounding SD card usage.
+# Written by rtkbase mount_tmpfs.sh
 [Journal]
 Storage=persistent
 SystemMaxUse=50M

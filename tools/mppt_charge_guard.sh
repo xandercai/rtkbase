@@ -1,23 +1,11 @@
 #!/bin/bash
-# Low-temperature MPPT charge guard. Writes the EPEVER "Charging device
-# on/off" coil (address 0): charging is switched off below
-# mppt_charge_min_temp_c and back on once the battery is
-# mppt_charge_hysteresis_c above it. Run periodically by
-# mppt_charge_guard.timer, independent of the archive/upload schedule.
+# Low-temperature MPPT charge guard, run by mppt_charge_guard.timer.
+# Writes the EPEVER "charging device on/off" coil (address 0): off below
+# mppt_charge_min_temp_c, on again above it + mppt_charge_hysteresis_c.
 #
-# Temperature source, in order of preference:
-#   1. the Raspberry Pi's own DS18B20 (tools/thermal_read.sh), mounted
-#      directly on the battery - used whenever one is found on the 1-Wire bus
-#   2. the MPPT controller's own battery_temperature_c, which reads closer to
-#      the controller box but still works when the DS18B20 is missing or
-#      fails (a loose 1-Wire lead used to leave charging stuck off)
-#
-# Fail-safe: if no temperature can be read at all for
-# mppt_charge_failsafe_minutes, charging is switched back on. Leaving it off
-# indefinitely drains the battery until the Pi itself browns out, and once
-# that happens nothing is left running to switch charging back on - the
-# station stays dead until someone visits it. Set it to 0 to disable this
-# (charging then stays in whatever state it was last put in).
+# Temperature: DS18B20 if present, else the MPPT's battery_temperature_c.
+# If neither can be read for mppt_charge_failsafe_minutes, charging is
+# turned back on, so a dead sensor can't drain the battery (0 disables).
 
 BASEDIR="$(dirname "$0")/.."
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
@@ -30,8 +18,7 @@ fi
 
 LOGS_DIR="${BASEDIR}/logs"
 mkdir -p "${LOGS_DIR}"
-# Kept on the SD card, not /tmp, so a reboot neither resets the fail-safe
-# clock nor forgets which state charging was last put in.
+# on the SD card so they survive a reboot
 UNKNOWN_SINCE_FILE="${LOGS_DIR}/mppt_guard_temp_unknown_since"
 LAST_STATE_FILE="${LOGS_DIR}/mppt_guard_last_coil"
 EPEVER_LOCK="/run/lock/rtkbase_epever485.lock"
@@ -41,9 +28,7 @@ hysteresis="${mppt_charge_hysteresis_c:-1.5}"
 failsafe_minutes="${mppt_charge_failsafe_minutes:-120}"
 
 _mppt() {
-    # The RS485 adapter is shared with mppt_power_sample.sh and
-    # archive_and_clean.sh - serialize access so two Modbus transactions
-    # never interleave on the wire.
+    # the RS485 port is shared with mppt_power_sample.sh and archive_and_clean.sh
     flock -w 20 "${EPEVER_LOCK}" "${BASEDIR}/venv/bin/python" "$@"
 }
 
@@ -76,8 +61,7 @@ if [ -z "$temperature_c" ]; then
     if reading=$(_mppt "${BASEDIR}/tools/mppt_read.py" \
         --port "${mppt_port}" --baudrate "${mppt_baudrate:-115200}" --slave-id "${mppt_slave_id:-1}")
     then
-        # json.dumps() puts a space after the colon, unlike thermal_read.sh's
-        # printf JSON above.
+        # json.dumps() adds a space after the colon
         temperature_c=$(echo "$reading" | grep -oE '"battery_temperature_c": *-?[0-9.]+' | grep -oE '\-?[0-9.]+$')
         source_label="MPPT battery_temperature_c"
     fi
@@ -98,9 +82,7 @@ if [ -z "$temperature_c" ]; then
 fi
 rm -f "${UNKNOWN_SINCE_FILE}"
 
-# below threshold -> off; at/above threshold + hysteresis -> on; in between,
-# keep whatever was last commanded, so a battery hovering right at the
-# threshold doesn't toggle charging every cycle.
+# < threshold: off, >= threshold + hysteresis: on, in between: unchanged
 decision=$(awk -v t="$temperature_c" -v th="$threshold" -v h="$hysteresis" \
     'BEGIN { if (t < th) print "off"; else if (t >= th + h) print "on"; else print "hold" }')
 last_state=$(cat "${LAST_STATE_FILE}" 2>/dev/null)
@@ -114,8 +96,7 @@ case "$decision" in
         ;;
     hold)
         if [ -z "$last_state" ]; then
-            # never commanded before (fresh install): inside the band counts
-            # as "not cold", same as the old single-threshold behaviour
+            # no previous state yet: treat as not cold
             write_coil 1 "${source_label} reads ${temperature_c}C (within hysteresis band, no previous state), allowing MPPT charging."
         else
             echo "$(date '+%Y-%m-%d %H:%M:%S') - ${source_label} reads ${temperature_c}C (within ${threshold}..$(awk -v a="$threshold" -v b="$hysteresis" 'BEGIN{print a+b}')C band), keeping charging $([ "$last_state" = "1" ] && echo on || echo off)."

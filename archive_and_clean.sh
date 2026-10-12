@@ -7,17 +7,14 @@ if [ "$HOME" = "/root" ]; then
     exit 1
 fi
 
-# Absolute, because the script cd's into the data dir further down: a
-# relative BASEDIR (e.g. a manual "./archive_and_clean.sh") then broke every
-# later ${BASEDIR}/... path - logs/, venv/, tools/.
+# absolute: the script cd's into the data dir below
 BASEDIR="$(cd "$(dirname "$0")" && pwd)"
 HOSTNAME=$(hostname)
 
 # Load configuration variables
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
 source "${BASEDIR}/tools/hw_detect.sh"
-# Hardware is resolved now rather than trusted from install time - see
-# tools/hw_detect.sh. Empty means "not on this station".
+# empty = not present on this station (see tools/hw_detect.sh)
 MODEM_PORT=$(resolve_modem_port)
 MPPT_PORT=$(resolve_mppt_port)
 NETWORK_ROLE=$(current_network_role)
@@ -45,9 +42,8 @@ MPPT_TMP="/tmp/rtkbase_mppt_${HOSTNAME}.json"
 THERMAL_TMP="/tmp/rtkbase_thermal_${HOSTNAME}.json"
 TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
 
-# LOGS_DIR is on the SD card, so it survives a reboot - unlike /tmp and the
-# data dir (tmpfs, see mount_tmpfs.sh) - which is what STEP 0 and STEP 5b need
-# to leave a trail through a stuck machine someone eventually power-cycles.
+# LOGS_DIR is on the SD card and survives a reboot, unlike /tmp and the
+# data dir (tmpfs).
 LOGS_DIR="${BASEDIR}/logs"
 mkdir -p "${LOGS_DIR}"
 FAILURE_COUNT_FILE="${LOGS_DIR}/upload_failure_count"
@@ -195,8 +191,7 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and compress new .${receiver_format:-u
 cd "${datadir}" || exit 1
 
 # ----------------- STEP 1: MPPT STATUS (point-in-time snapshot) -----------------
-# MPPT_PORT is the /dev/epever485 udev symlink whenever the RS485 adapter
-# is plugged in (see tools/hw_detect.sh). Empty means no MPPT hardware here.
+# MPPT_PORT is empty when no RS485 adapter is plugged in
 if [ -n "${MPPT_PORT}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading MPPT status from ${MPPT_PORT}..."
     if flock -w 30 /run/lock/rtkbase_epever485.lock \
@@ -249,12 +244,8 @@ if [ -s "${POWER_SAMPLES}" ]; then
 fi
 
 # ----------------- STEP 2: THERMAL SENSOR (point-in-time snapshot) -----------------
-# Read whenever a DS18B20 is actually on the 1-Wire bus right now, or
-# install.sh flagged one (the overlay itself is only loaded if install.sh
-# found a sensor, see settings.conf's [thermal] section). Otherwise skip
-# quietly rather than warn every cycle about a read that can't work -
-# battery_temperature_c in the MPPT snapshot (STEP 1) covers this station
-# on the dashboard instead, at no extra upload cost.
+# Only when a DS18B20 is present; otherwise the MPPT snapshot's
+# battery_temperature_c covers this station on the dashboard.
 if [ "${thermal_sensor_present:-0}" = "1" ] \
     || find /sys/bus/w1/devices -maxdepth 1 -name '28-*' -print -quit 2>/dev/null | grep -q .
 then
@@ -333,29 +324,21 @@ fi
 # next run, unlike the point-in-time snapshots above, which have no such
 # recovery if this run runs out of time or network).
 #
-# Each closed raw file is compressed once and the raw file deleted right
-# away; from then on the .7z is the only local copy, and rclone move
-# deletes it once it's on Drive.
-#
-# Storage tiers: str2str records into datadir, which is a RAM disk (tmpfs,
-# see mount_tmpfs.sh) so the SD card isn't worn by a continuous write
-# stream. Archives waiting for upload only move to OVERFLOW_DIR on the SD
-# card once they no longer fit in RAM (STEP 5), and that is capped too.
+# Closed raw files are compressed and then deleted; the .7z is removed by
+# rclone move once it is on Drive. Recording happens in datadir (RAM disk);
+# pending archives move to OVERFLOW_DIR on the SD card only when RAM is
+# full (STEP 5).
 OVERFLOW_DIR="${overflow_dir:-${BASEDIR}/data_overflow}"
 mkdir -p "${OVERFLOW_DIR}"
 
-# str2str_file names its output after receiver_format (run_cast.sh's
-# out_file): .ubx for the F9P, but .rtcm3 for the UM980 and .sbf for the
-# mosaic-X5. Hard-coding *.ubx here meant a UM980 station's data was never
-# compressed, uploaded or deleted - it just piled up on the SD card.
+# extension follows receiver_format: ubx (F9P), rtcm3 (UM980), sbf (mosaic-X5)
 raw_ext="${receiver_format:-ubx}"
 
 # total size of the .7z archives in a directory, in MB
 _archives_mb() {
     find "$1" -maxdepth 1 -name '*.7z' -printf '%s\n' 2>/dev/null | awk '{s += $1} END {print int(s / 1048576)}'
 }
-# oldest .7z in a directory - by mtime, which -stl below sets to the
-# recording time rather than the compression time
+# oldest .7z in a directory (mtime = recording time, see -stl below)
 _oldest_archive() {
     find "$1" -maxdepth 1 -name '*.7z' -printf '%T@ %p\n' 2>/dev/null | sort -n | head -n 1 | cut -d' ' -f2-
 }
@@ -363,24 +346,16 @@ _archive_count() {
     find "$1" -maxdepth 1 -name '*.7z' 2>/dev/null | wc -l
 }
 
-# Raw files normally only exist in datadir; OVERFLOW_DIR can hold some
-# right after mount_tmpfs.sh moved an old SD-card data dir's content there.
+# OVERFLOW_DIR may hold raw files moved there by mount_tmpfs.sh
 for file in "${datadir}"/*."${raw_ext}" "${OVERFLOW_DIR}"/*."${raw_ext}"; do
     [[ -e "$file" ]] || continue
 
     if [[ $(find "$file" -mmin +1) ]]; then
         echo "Compressing raw data file: $(basename "$file")"
-        # -mx=5 -md=16m instead of -mx=9 -md=128m: the latter can need well
-        # over 1 GB of RAM on a large file, which a Pi 3B+ doesn't have, and
-        # it's several times slower - eating into the LTE online window -
-        # for a few percent of size on already-dense raw GNSS data.
-        # -mmt=2 leaves the other cores to str2str. -stl stamps the .7z with
-        # the raw file's own mtime, so STEP 5's "oldest first" goes by
-        # recording time rather than by when it got compressed. Output is
-        # kept (not sent to /dev/null) so a failure says why in journalctl.
+        # -mx=5 -md=16m: -mx=9 -md=128m needs too much RAM for a Pi 3B+.
+        # -stl keeps the raw file's mtime on the archive.
         sevenz_name="${file%.*}_${HOSTNAME}.7z"
-        # a .7z left over from a run killed mid-compression would otherwise
-        # have this file appended into it as a second copy
+        # remove a partial archive from an interrupted run
         rm -f "$sevenz_name"
         if compress_output=$(7z a -t7z -m0=lzma2 -mx=5 -md=16m -mmt=2 -stl "$sevenz_name" "$file" 2>&1); then
             rm -f "$file"
@@ -392,17 +367,13 @@ for file in "${datadir}"/*."${raw_ext}" "${OVERFLOW_DIR}"/*."${raw_ext}"; do
     fi
 done
 
-# Upload every pending .7z - RAM first (it's what a power cut would lose),
-# then the SD overflow - including ones left over from earlier failed runs.
+# upload RAM first (lost on power cut), then the SD overflow
 pending_ram=$(_archive_count "${datadir}")
 pending_sd=$(_archive_count "${OVERFLOW_DIR}")
 
-# A client uploading through the master's eth0 share only has the master's
-# LTE window: the master goes back to airplane mode lte_online_minutes after
-# waking (lte_on_before_minutes before this run started), and its own
-# upload hold only covers its own run. Stop starting new transfers a minute
-# before that instead of having them cut off mid-file; whatever is left
-# simply goes next cycle. Doesn't apply when the client is on WiFi.
+# A client going through the master's eth0 share must finish before the
+# master's LTE window closes; stop a minute early and leave the rest for
+# the next cycle. Not applied when the client uses WiFi.
 uplink_dev=$(ip route get 8.8.8.8 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
 client_via_master=0
 [ "$NETWORK_ROLE" = "client" ] && [ "$uplink_dev" = "eth0" ] && client_via_master=1
@@ -424,11 +395,7 @@ if [ $((pending_ram + pending_sd)) -gt 0 ]; then
             echo "$(date '+%Y-%m-%d %H:%M:%S') - Master's LTE window is about to close, leaving the remaining GNSS archives for the next cycle."
             break
         fi
-        # Routed through _rclone_upload_or_warn like the other sources (see
-        # its own comment above) so a failure says why (rate limit, auth,
-        # timeout...) in journalctl. rclone move only deletes a local .7z
-        # once that file is on Drive, so a partial failure just leaves the
-        # rest for the next run.
+        # rclone move deletes each .7z once uploaded; failures stay for next run
         if _rclone_upload_or_warn "$RCLONE_LOG_GNSS" "GNSS batch (${upload_dir})" move "${upload_dir}/" "${GDRIVE_GNSS_REMOTE}" \
             --config "${RCLONE_CONF_TMP}" \
             --no-update-modtime \
@@ -451,13 +418,10 @@ else
 fi
 
 # ----------------- STEP 5: RAM -> SD SPILL, SD CAP -----------------
-# During an LTE outage nothing leaves the station. Keep the RAM disk
-# comfortably free for the file being recorded: once the archives waiting
-# in RAM exceed ram_pending_max_mb, or the RAM disk is more than 75% full,
-# move the oldest to the SD overflow. The overflow in turn never grows past
-# sd_overflow_max_mb nor leaves less than min_free_space MB free on the
-# card - beyond that the oldest overflow archives are deleted, logged as
-# errors, rather than letting a full card stop str2str and hang the system.
+# Pending archives above ram_pending_max_mb (or RAM disk > 75% full) move
+# to the SD overflow, oldest first. The overflow is capped at
+# sd_overflow_max_mb and min_free_space MB free; beyond that the oldest
+# archives are deleted so the card never fills up.
 ram_pending_max="${ram_pending_max_mb:-128}" ; [[ "$ram_pending_max" =~ ^[0-9]+$ ]] || ram_pending_max=128
 sd_overflow_max="${sd_overflow_max_mb:-4000}" ; [[ "$sd_overflow_max" =~ ^[0-9]+$ ]] || sd_overflow_max=4000
 min_free_mb="${min_free_space:-500}" ; [[ "$min_free_mb" =~ ^[0-9]+$ ]] || min_free_mb=500
@@ -534,17 +498,9 @@ fi
 # lte_off.sh below checks the same flag and would otherwise refuse to power
 # down, defeating upload_window mode's whole point.
 #
-# A master currently sharing LTE over eth0 doesn't switch off early: the
-# client Pi behind it may still be uploading, and this script can't see
-# that. lte_modem_off.timer's fixed deadline - which the client's own
-# upload deadline is computed against - still applies.
-#
-# Either mode: if this run outlasted that deadline, lte_modem_off.timer has
-# already fired while our hold was set and skipped the power-off - and it
-# won't fire again until the next cycle, so without this the modem stayed
-# on for a whole extra rotation period. Switch it off now instead.
-# (The deadline is lte_online_minutes after lte_modem_on.timer, which fires
-# lte_on_before_minutes before this run starts - see tools/copy_unit.sh.)
+# A master sharing LTE with a client doesn't switch off early, the client
+# may still be uploading. If this run went past the LTE window, the off
+# timer was skipped because of our hold, so switch the modem off here.
 release_lte_hold
 lte_deadline=$(( SCRIPT_START + (${lte_online_minutes:-10} - ${lte_on_before_minutes:-2}) * 60 ))
 if [ -n "${MODEM_PORT}" ] && [ "$(date +%s)" -ge "$lte_deadline" ]; then

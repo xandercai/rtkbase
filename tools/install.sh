@@ -134,8 +134,7 @@ install_dependencies() {
     echo '################################'
       apt-get "${APT_TIMEOUT}" update -y || exit 1
       apt-get "${APT_TIMEOUT}" install -y git build-essential pps-tools python3-pip python3-venv python3-dev python3-setuptools python3-wheel python3-serial libsystemd-dev bc dos2unix socat zip unzip pkg-config psmisc proj-bin nftables rclone p7zip-full dnsmasq-base || exit 1
-      # dnsmasq-base: NetworkManager's "shared" mode (the LTE master serving
-      # a client Pi on eth0, see tools/network_role.sh) needs it for DHCP
+      # dnsmasq-base: needed by NetworkManager's shared mode (tools/network_role.sh)
       apt-get "${APT_TIMEOUT}" install -y libxml2-dev libxslt-dev || exit 1 # needed for lxml (for pystemd)
       apt-get "${APT_TIMEOUT}" install -y vim || exit 1 # optional
       #apt-get "${APT_TIMEOUT}" upgrade -y
@@ -405,11 +404,8 @@ rtkbase_requirements(){
       then
         cp "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf"
       fi
-      # Add any keys new in settings.conf.default to an existing settings.conf
-      # (existing values win) and expand $BASEDIR paths. The web UI used to
-      # be the only thing doing this, at its own startup - it's now off by
-      # default (web_ui_enabled), so do it here. Standard library only, so
-      # the system python3 is enough - no venv needed yet.
+      # Merge new settings.conf.default keys into settings.conf (existing
+      # values are kept). The web UI did this at startup but is off by default.
       sudo -u "${RTKBASE_USER}" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from RTKBaseConfigManager import RTKBaseConfigManager; RTKBaseConfigManager(sys.argv[2], sys.argv[3])' \
         "${rtkbase_path}/web_app" "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf" \
         || echo 'Warning: could not merge new settings.conf.default entries into settings.conf'
@@ -516,9 +512,7 @@ install_unit_files() {
       then 
         #Install unit files
         "${rtkbase_path}"/tools/copy_unit.sh --python_path "${rtkbase_path}"/venv/bin/python --user "${RTKBASE_USER}"
-        # web_ui_enabled defaults to '0' in settings.conf.default; anything
-        # but an explicit '0' (e.g. an older settings.conf saying '1')
-        # enables the admin GUI (see settings.conf's [web] section).
+        # web UI only if web_ui_enabled isn't '0'
         grep -qE "^web_ui_enabled='0'" "${rtkbase_path}"/settings.conf 2>/dev/null || systemctl enable rtkbase_web.service
         systemctl enable rtkbase_archive.timer
         systemctl daemon-reload
@@ -577,9 +571,7 @@ detect_gnss() {
         echo '################################'
         systemctl is-active --quiet str2str_tcp.service && systemctl stop str2str_tcp.service && echo 'Stopping str2str_tcp service'
         # TODO remove port if not available in /dev/
-        # ttyGNSS first: 91-gnss.rules pins a UM980's USB-serial bridge to it,
-        # and on an LTE station the modem's own ttyUSB0..4 can push the UM980
-        # to ttyUSB5, outside the fixed list below.
+        # ttyGNSS first: the UM980 may not be on ttyUSB0..2 when a modem is present
         for port in ttyGNSS ttyS0 ttyUSB0 ttyUSB1 ttyUSB2 serial0 ttyS1 ttyS2 ttyS3 ttyS4 ttyS5; do
             [[ -e /dev/$port ]] || continue
             for port_speed in 115200 57600 38400 19200 9600; do
@@ -846,15 +838,12 @@ _configure_modem(){
   # interface doesn't need this step anyway: rndis_host binds its usb0
   # interface automatically (see 92-usb-teltonika-at.rules), unlike SIMCOM
   # which needs this script's AT commands to switch into ECM mode (stored
-  # in the modem itself, so this only needs doing once per modem).
+  # in the modem, so once per modem is enough).
   sudo -u "${RTKBASE_USER}" "${rtkbase_path}/venv/bin/python" "${rtkbase_path}"/tools/modem_config.py --config
   if [ $? -ne 0 ]; then
     echo "Warning: modem_config.py failed (expected on non-SIMCOM modems, e.g. Teltonika Calyx, which don't need this SIMCOM-specific ECM-mode setup)."
   fi
-  # NetworkManager profiles for usb0/eth0 are owned by network_role.sh
-  # (also run at every boot by rtkbase_network_role.timer). It replaces the
-  # old lte_network_mgmt.sh --connection_rename/--lte_priority calls, whose
-  # "Cellular Modem" profile fought setup_lte_share.sh's lte-usb0 one.
+  # usb0/eth0 NetworkManager profiles are managed by network_role.sh
   rm -f /run/rtkbase/network_role
   bash "${rtkbase_path}"/tools/network_role.sh
 }
@@ -986,12 +975,8 @@ start_services() {
   # also depends on the same broken sim_modem handshake that lte_at.py was
   # written to route around, so it never actually completes anyway - see
   # tools/modem_check.py.
-  # The LTE and MPPT timers are enabled unconditionally: their scripts
-  # resolve the hardware at run time (tools/hw_detect.sh) and exit quietly
-  # when it isn't there. Enabling them only if the modem/adapter happened to
-  # be plugged in during install meant a station installed in the office and
-  # completed in the field silently never got its LTE schedule or its
-  # cold-charge guard.
+  # LTE and MPPT timers are always enabled: the scripts check for the
+  # hardware at run time and do nothing without it (tools/hw_detect.sh)
   # Power-saving LTE schedule (see tools/lte_hold.sh / lte_release.sh for
   # the manual SSH override)
   systemctl enable --now lte_modem_on.timer
@@ -1132,8 +1117,7 @@ main() {
     [[ $ARG_ALL == 'repo' ]] && [[ "${ARG_RTKBASE_REPO}" == "0" ]] && { echo 'you have to specify the branch with --rtkbase-repo' ; exit 1 ;}
     [[ $ARG_ALL == 'url' ]] && [[ "${ARG_RTKBASE_SRC}" == "0" ]] && { echo 'you have to specify the url with --rtkbase-custom' ; exit 1 ;}
     #Okay launching installation
-    # Tailscale failing to install (e.g. no route to tailscale.com yet) is
-    # worth a warning, not a reason to skip installing RTKBase itself.
+    # a Tailscale install failure shouldn't stop the rest of the install
     install_dependencies && \
     { install_tailscale || echo 'Warning: Tailscale installation failed - continuing without it. Rerun install.sh later or install it by hand.' ; true ;} && \
     case $ARG_ALL in

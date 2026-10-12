@@ -2,10 +2,7 @@
 Description=RTKBase - (re)check LTE master/client role and eth0 sharing
 
 [Timer]
-# first run shortly after boot (network_role.sh itself waits up to
-# modem_wait_seconds for the modem to enumerate), then re-check every 2
-# minutes after the previous run finished - picks up an eth0 cable plugged
-# in after boot, or a modem that showed up late
+# at boot, then every 2 min after the previous run (late eth0 cable or modem)
 OnBootSec=15s
 OnUnitInactiveSec=2min
 AccuracySec=10s

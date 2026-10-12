@@ -80,22 +80,15 @@ file_overlap_time='0'
 archive_name=$file_name.7z
 #archives older than this value (in days) will be deleted by archive_and_clean.sh
 archive_rotate='3'
-# GNSS data is kept in RAM to spare the SD card: datadir is a tmpfs (see
-# mount_tmpfs.sh), str2str records into it and archive_and_clean.sh
-# compresses and uploads from it. Size limit of that RAM disk in MB (only
-# what is actually stored uses RAM). Re-run 'sudo ./mount_tmpfs.sh' and
-# reboot after changing it. Trade-off: whatever is still in RAM when power
-# is lost is gone - upload windows keep that to the last few hours.
+# datadir is a RAM disk (mount_tmpfs.sh) of this size in MB. Re-run
+# 'sudo ./mount_tmpfs.sh' and reboot after changing it. Data not yet
+# uploaded is lost on a power cut.
 ram_data_max_mb='256'
-# Compressed archives still waiting for upload (e.g. an LTE outage) may use
-# at most this much of the RAM disk; beyond that - or once the RAM disk is
-# more than 75% full - the oldest ones are moved to overflow_dir on the SD
-# card, so the recording itself never runs out of room.
+# archives waiting for upload kept in RAM, in MB; above this (or when the
+# RAM disk is over 75% full) the oldest move to overflow_dir
 ram_pending_max_mb='128'
-# SD-card overflow for archives that no longer fit in RAM, capped at
-# sd_overflow_max_mb. Past the cap, or when the card has less than
-# min_free_space MB free, the oldest overflow archives are deleted (logged
-# as errors), so a long outage can never fill the card and hang the system.
+# SD card overflow, capped at sd_overflow_max_mb; beyond that (or below
+# min_free_space) the oldest archives are deleted
 overflow_dir=$BASEDIR/data_overflow
 sd_overflow_max_mb='4000'
 #minimum free space on the SD card (in MB) before oldest overflow archives are deleted
@@ -220,28 +213,18 @@ logdir=$BASEDIR/logs
 level=0
 
 [network]
-# LTE modem AT port. '' (or 'auto') = use /dev/ttymodemAT whenever a
-# supported modem is plugged in (its udev rule creates that link), checked
-# at run time - nothing needs to be attached during install. 'none' = never
-# use a modem on this station. Any other value is used as a fixed path.
+# LTE modem AT port: '' or 'auto' = /dev/ttymodemAT if present (checked at
+# run time), 'none' = no modem, or a fixed path
 modem_at_port=''
 #lte modem AT port baudrate (115200 for the Waveshare SIM7600G-H HAT)
 modem_baudrate='115200'
 
-# Decided at every boot by tools/network_role.sh (rtkbase_network_role.timer):
-#   'auto'   - 'master' if an LTE modem shows up within modem_wait_seconds
-#              after boot, 'client' otherwise
-#   'master' - uplink over the LTE modem (usb0); with lte_share='1', also
-#              serves a client Pi on eth0 (192.168.100.1/24, DHCP + NAT) -
-#              but only when nothing else answers DHCP on eth0, so plugged
-#              into an office/home LAN it stays an ordinary LAN client
-#   'client' - no modem: eth0 waits for a master (or any router) as a DHCP
-#              client; WiFi, when connected, is preferred over eth0
-# WiFi networks configured at install time keep auto-connecting in every
-# role, for SSH access on site, and whenever WiFi is connected (and really
-# reaches the internet) traffic uses it rather than LTE - in either role.
-# Nothing else changes with WiFi: the LTE schedule, uploads and Tailscale
-# run exactly as without it.
+# Set at boot by tools/network_role.sh:
+#   'auto'   - master if an LTE modem appears within modem_wait_seconds
+#   'master' - uplink over LTE; with lte_share='1' also shares it on eth0
+#              (192.168.100.1/24) when no DHCP server answers there
+#   'client' - no modem, eth0 is a DHCP client of the master
+# WiFi always auto-connects and is preferred over LTE when it has internet.
 network_role='auto'
 lte_share='1'
 modem_wait_seconds='60'
@@ -270,9 +253,7 @@ lte_schedule_mode='fixed_window'
 # lte_modem_on.timer. In fixed_window mode this is the actual on-duration;
 # in upload_window mode it's the safety-net ceiling. Must be comfortably
 # longer than lte_on_before_minutes + how long uploads usually take.
-# When a master shares its LTE with a client Pi, both stations' uploads
-# have to fit in this window (a client stops starting new GNSS transfers a
-# minute before it closes) - use the same value on both, e.g. 15.
+# With a shared LTE, both stations upload in this window: use e.g. 15 on both.
 lte_online_minutes='10'
 
 # Consecutive archive_and_clean.sh cycles with zero successful uploads
@@ -290,9 +271,8 @@ lte_reset_after_failed_cycles='3'
 # lte_reset_after_failed_cycles above - keep this noticeably larger, so the
 # modem reset gets a fair chance to fix things on its own first),
 # archive_and_clean.sh dumps the current boot's entire journal to
-# <rtkbase>/logs/ on the SD card. The systemd journal itself is persistent
-# too (see mount_tmpfs.sh) but capped at 50 MB, so on a multi-day outage
-# its oldest part rotates away - this dump keeps a copy. Repeats every
+# <rtkbase>/logs/ on the SD card (the journal itself is capped at 50 MB and
+# rotates). Repeats every
 # this-many cycles for as long as the outage
 # continues, so the snapshot keeps getting refreshed rather than only ever
 # capturing the first few hours of what might turn into a multi-day outage.
@@ -306,18 +286,12 @@ debug_dump_after_failed_cycles='6'
 tailscale_watchdog_interval='5'
 # delay after boot before the first watchdog check, in minutes
 tailscale_watchdog_boot_delay='2'
-# the exact flags this station was first brought up with ("sudo tailscale
-# up --ssh" -> '--ssh'). The watchdog's own recovery "tailscale up" must
-# repeat them, or Tailscale rejects it and never reconnects.
+# flags used with the first 'sudo tailscale up' (e.g. '--ssh'), reused by the watchdog
 tailscale_up_flags=''
 
 [mppt]
-# EPEVER Tracer RS485-USB adapter. '' (or 'auto') = use /dev/epever485
-# whenever the adapter is plugged in, checked at run time (udev rule
-# 93-epever485.rules creates that link from its USB ID, so it can never be
-# confused with the LTE modem's ports). 'none' = never use one. Optionally
-# run install.sh --detect-mppt with the adapter plugged in to also pin its
-# USB serial number.
+# EPEVER RS485-USB adapter: '' or 'auto' = /dev/epever485 if present
+# (checked at run time), 'none' = no MPPT, or a fixed path
 mppt_port=''
 mppt_baudrate='115200'
 mppt_slave_id='1'
@@ -329,14 +303,10 @@ mppt_slave_id='1'
 # coil accordingly - below the threshold, charging is switched off; at or
 # above it, switched back on. Only takes effect when mppt_port above is set.
 mppt_charge_min_temp_c='2'
-# charging only comes back on once the battery is this much above
-# mppt_charge_min_temp_c, so a reading hovering at the threshold doesn't
-# toggle it every check
+# charging resumes at mppt_charge_min_temp_c + this
 mppt_charge_hysteresis_c='1.5'
-# if no battery temperature (neither the DS18B20 nor the MPPT's own probe)
-# can be read for this many minutes, switch charging back ON rather than
-# risk leaving it off until the battery - and with it the Pi that would
-# switch it back on - is dead. 0 disables the fail-safe.
+# turn charging back on if no temperature can be read for this many
+# minutes (0 = disabled)
 mppt_charge_failsafe_minutes='120'
 mppt_charge_check_minutes='20'
 # delay after boot before the first check, in minutes
@@ -373,11 +343,6 @@ thermal_sensor_present='0'
 [web]
 # Whether install.sh enables and starts rtkbase_web.service (the local
 # admin/config GUI on web_port above - unrelated to rtkdashboard, which
-# is a separate, read-only project). Off by default: these stations are
-# configured through settings.conf/SSH, and the GUI is a liability on
-# them - it runs as root on 0.0.0.0:80 (reachable from the whole tailnet,
-# not just the LAN), ships with upstream's default password, and its
-# "Update" button installs upstream Stefal/rtkbase releases over this
-# fork, wiping out the LTE/MPPT/upload customisations. Set to '1' before
-# running install.sh only if you really need it.
+# is a separate, read-only project). Off by default: its Update button
+# installs upstream releases over this fork.
 web_ui_enabled='0'

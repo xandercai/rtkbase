@@ -63,10 +63,7 @@ FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "$conf_file" | cut -d"'" -f2)
 # if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
 
-# The timers below sit on a fixed wall-clock grid ("every N hours from
-# 00:00"), which only lines up with str2str's N-hour file rotation when N
-# divides 24 - anything else (5, 7, a decimal like 0.1) used to produce an
-# invalid or irregular OnCalendar expression, silently breaking uploads.
+# the timers use an "every N hours from 00:00" grid, N must divide 24
 case "$FILE_ROTATE_TIME" in
   0|1|2|3|4|6|8|12|24) ;;
   *)
@@ -76,11 +73,8 @@ case "$FILE_ROTATE_TIME" in
     ;;
 esac
 
-# Placeholder substitutions for the unit templates below. They're applied
-# while copying to /etc/systemd/system, never to the templates under unit/
-# themselves: editing those in place meant the first install consumed the
-# {{...}} placeholders, so any later settings change + reinstall silently
-# kept the old schedule.
+# {{...}} placeholder substitutions, applied when copying the units to
+# /etc/systemd/system (the templates in unit/ are left untouched)
 TEMPLATE_SUBST=()
 
 # upload every 1 hour

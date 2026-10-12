@@ -9,12 +9,7 @@ LOG_PREFIX="$(date '+%Y-%m-%d %H:%M:%S') [tailscale-watchdog]"
 BASEDIR="$(dirname "$0")/.."
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
 
-# ── 0. Is there any internet uplink at all right now? ───────────────────────
-# A client Pi behind a master's LTE share is offline most of the time (the
-# master's modem sits in airplane mode between upload windows), and so is
-# any station whose WiFi is out of range. Trying to bring Tailscale up then
-# can only fail - and every failure lands in the uploaded journal as an
-# error. Nothing to repair while offline; check again next cycle.
+# ── 0. Any internet at all? (e.g. a client outside the master's LTE window) ─
 if ! ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 && ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
     echo "${LOG_PREFIX} No internet uplink right now, skipping this check."
     exit 0
@@ -33,10 +28,7 @@ TS_STATUS=$(tailscale status --json 2>/dev/null | python3 -c \
 
 if [ "${TS_STATUS}" != "Running" ]; then
     echo "${LOG_PREFIX} Tailscale state is '${TS_STATUS}', attempting tailscale up..."
-    # Recent Tailscale versions refuse a bare "tailscale up" if the node was
-    # first brought up with any non-default flag (e.g. --ssh), so recovery
-    # has to repeat exactly those flags - see tailscale_up_flags in
-    # settings.conf. Unquoted on purpose: it's a list of flags.
+    # must repeat the original flags (e.g. --ssh) or tailscale refuses
     # shellcheck disable=SC2086
     tailscale up ${tailscale_up_flags} --timeout 30s
     sleep 10

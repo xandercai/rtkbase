@@ -6,12 +6,8 @@
 # wedged on the old (now-gone) device forever.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", SYMLINK+="ttyGNSS", TAG+="systemd", ENV{SYSTEMD_WANTS}+="str2str_tcp.service"
 
-#Unicore UM980/UM982 behind a Prolific PL2303 USB-serial bridge (067b:23a3).
-# It shows up as a plain /dev/ttyUSBn, and the LTE modems (SIM7600, Teltonika)
-# also create ttyUSB0..4, so the number isn't stable across boots - pin it to
-# ttyGNSS like the receivers above, which is also what str2str_tcp.service's
-# BindsTo=dev-ttyGNSS.device waits for. PL2303 bridges usually have no serial
-# number, so this assumes it's the only PL2303 on the board.
+#Unicore UM980/UM982 via Prolific PL2303 (067b:23a3). Its ttyUSBn number
+# shifts with the LTE modem's ports. Assumes a single PL2303 on the station.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="067b", ATTRS{idProduct}=="23a3", GROUP="dialout", SYMLINK+="ttyGNSS", TAG+="systemd", ENV{SYSTEMD_WANTS}+="str2str_tcp.service"
 
 #Septentrio
