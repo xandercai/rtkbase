@@ -281,6 +281,15 @@ mppt_slave_id='1'
 # coil accordingly - below the threshold, charging is switched off; at or
 # above it, switched back on. Only takes effect when mppt_port above is set.
 mppt_charge_min_temp_c='2'
+# charging only comes back on once the battery is this much above
+# mppt_charge_min_temp_c, so a reading hovering at the threshold doesn't
+# toggle it every check
+mppt_charge_hysteresis_c='1.5'
+# if no battery temperature (neither the DS18B20 nor the MPPT's own probe)
+# can be read for this many minutes, switch charging back ON rather than
+# risk leaving it off until the battery - and with it the Pi that would
+# switch it back on - is dead. 0 disables the fail-safe.
+mppt_charge_failsafe_minutes='120'
 mppt_charge_check_minutes='20'
 # delay after boot before the first check, in minutes
 mppt_charge_guard_boot_delay='2'

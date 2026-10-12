@@ -191,7 +191,8 @@ cd "${datadir}" || exit 1
 # RS485-USB adapter with a udev symlink. Empty means no MPPT hardware here.
 if [ -n "${mppt_port}" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading MPPT status from ${mppt_port}..."
-    if "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/mppt_read.py" \
+    if flock -w 30 /run/lock/rtkbase_epever485.lock \
+        "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/mppt_read.py" \
         --port "${mppt_port}" --baudrate "${mppt_baudrate:-115200}" --slave-id "${mppt_slave_id:-1}" \
         > "${MPPT_TMP}"
     then
