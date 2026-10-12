@@ -31,45 +31,63 @@ A ready to flash Armbian image is available for Raspberry Pi, Orange Pi Zero, Or
 
 For older Raspberry Pi releases, see [here](https://github.com/jancelin/pi-gen/releases/latest).
 
-## Easy installation:
-+ Connect your gnss receiver to your raspberry pi/orange pi/....
+## Installation (field station):
+Install on office WiFi; the station then works as soon as it is powered up in the field.
 
-+ Open a terminal and:
+1. **Flash** Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager. In the advanced settings set a unique hostname (e.g. `gripi003`, it is used in uploaded file names and in Tailscale), user/password, SSH, the office WiFi (country NZ) and the time zone.
 
-  ```bash
-  cd ~
-  wget https://raw.githubusercontent.com/xandercai/rtkbase/master/tools/install.sh -O install.sh
-  chmod +x install.sh
-  sudo ./install.sh --all repo --rtkbase-repo master
-  cd rtkbase
-  chmod +x mount_tmpfs.sh
-  sudo ./mount_tmpfs.sh && sudo reboot
-  ```
+2. **Connect** the GNSS receiver (F9P or UM980), and the DS18B20 if the station has one. The LTE modem and the MPPT adapter are optional at this point, they are detected at every boot.
 
-+ Before taking a station to the field (still on office WiFi):
-  - `sudo tailscale up` (add your usual flags, and put the same flags in `tailscale_up_flags` in settings.conf), then disable key expiry for the machine in the Tailscale admin console
-  - configure rclone's `gdrive:` remote for the rtkbase user
-  - optionally add your phone hotspot as a second WiFi network (`sudo nmcli device wifi connect <ssid> password <pw>`), so you can SSH in on site
-  - run `~/rtkbase/tools/field_check.sh` and fix any FAIL
+3. **Install**:
 
-  LTE modem, MPPT adapter and the master/client role (a Pi with a modem shares it over eth0 with a Pi without one) are detected at every boot, so they don't need to be attached during installation. See the `[network]` section of settings.conf.
+   ```bash
+   cd ~
+   wget https://raw.githubusercontent.com/xandercai/rtkbase/master/tools/install.sh -O install.sh
+   chmod +x install.sh
+   sudo ./install.sh --all repo --rtkbase-repo master
+   ```
 
-+ Go grab a coffee, it's gonna take a while. The script will install the needed software, and if you use a supported receiver (U-Blox ZED-F9P, Septentrio Mosaic-X5, Unicore UM980/UM982), it'll be detected and set to work as a base station. If you don't use a supported recevier, you will have to configure your receiver manually (see step 7 in manual installation), and choose the correct port from the settings page.
+   Waveshare SIM7600 only, the first time a modem is used (switches it to ECM mode, stored in the modem): connect it and run `sudo ./install.sh --detect-modem`. Not needed for the Teltonika.
 
-+ Open a web browser to `http://ip_of_your_sbc` (the script will try to show you this ip address). Default password is `admin`. The settings page allows you to enter your own settings for the base coordinates, ntrip credentials and so on...
+4. **Storage** (data in RAM, persistent journal):
 
-   <img src="./images/web_all_settings.png" alt="all settings" width="600" />
+   ```bash
+   cd ~/rtkbase && sudo ./mount_tmpfs.sh
+   ```
 
-   If you don't already know your base precise coordinates, it's time to read one of these tutorials:
-   - [rtklibexplorer - Post-processing RTK - for single and dual frequency receivers](https://rtklibexplorer.wordpress.com/2020/02/05/rtklib-tips-for-using-a-cors-station-as-base/)
-   - [rtklibexplorer - PPP - for dual frequency receivers](https://rtklibexplorer.wordpress.com/2017/11/23/ppp-solutions-with-the-swiftnav-piksi-multi/)
-   - [Centipede documentation (in french)](https://docs.centipede.fr/docs/base/positionnement.html)
+5. **Tailscale**: `sudo tailscale up` and log in. Then disable key expiry for the machine in the Tailscale admin console. If you use flags (e.g. `--ssh`), put the same ones in `tailscale_up_flags` in `~/rtkbase/settings.conf`.
 
-+ To help you find your base ip address, you can use the simple `find_rtkase` gui tool. It is available for Gnu/Linux and Windows in [./tools/find_rtkbase/dist](./tools/find_rtkbase/dist/).
-  
-   - Click on the "Find" button, wait, then click on the "Open" button. It will open the RTKBase GUI in your web browser.
+6. **rclone**: as the normal user (no sudo), either copy `~/.config/rclone/rclone.conf` from a working station, or run `rclone config` and create a Google Drive remote named `gdrive` (use `rclone authorize "drive"` on a PC for the browser step).
 
-     <img src="./tools/find_rtkbase/find_rtkbase_screenshot.png" alt="screenshot of find_rtkbase tool" width="300" />
+7. Optional, **phone hotspot** for SSH on site (the phone doesn't need to be on):
+
+   ```bash
+   sudo nmcli connection add type wifi con-name hotspot ifname wlan0 ssid "<ssid>" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "<password>"
+   ```
+
+8. Only for a **master/client pair** sharing one LTE modem: set `lte_online_minutes='15'` in `~/rtkbase/settings.conf` on both, then `cd ~ && sudo ./install.sh --unit-files`.
+
+9. **Reboot and check**, with the GNSS antenna seeing the sky:
+
+   ```bash
+   sudo reboot
+   ~/rtkbase/tools/field_check.sh
+   ```
+
+   Fix every FAIL until it prints `Ready for the field.`
+
+10. **Deploy**: `sudo poweroff`, connect everything on site (for a pair, an ethernet cable between the two Pis), power on.
+
+The LTE modem, the MPPT adapter and the master/client role are detected at every boot (see the `[network]` section of settings.conf). WiFi is always preferred over LTE when it has internet. The web UI is disabled by default (`web_ui_enabled`).
+
+## Updating an existing station:
+```bash
+cd ~/rtkbase && git pull
+sudo ./tools/install.sh --dependencies --rtkbase-requirements --unit-files --gpsd-chrony --start-services
+sudo ./mount_tmpfs.sh
+sudo reboot
+```
+Older settings.conf files keep `web_ui_enabled='1'`: set it to `'0'` before running `install.sh` to turn the web UI off. After the reboot, run `~/rtkbase/tools/field_check.sh`.
 
 ## Manual installation: 
 The `install.sh` script can be used without the `--all` option to split the installation process into several different steps:
