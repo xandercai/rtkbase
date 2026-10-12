@@ -567,7 +567,11 @@ detect_gnss() {
         echo '################################'
         systemctl is-active --quiet str2str_tcp.service && systemctl stop str2str_tcp.service && echo 'Stopping str2str_tcp service'
         # TODO remove port if not available in /dev/
-        for port in ttyS0 ttyUSB0 ttyUSB1 ttyUSB2 serial0 ttyS1 ttyS2 ttyS3 ttyS4 ttyS5; do
+        # ttyGNSS first: 91-gnss.rules pins a UM980's USB-serial bridge to it,
+        # and on an LTE station the modem's own ttyUSB0..4 can push the UM980
+        # to ttyUSB5, outside the fixed list below.
+        for port in ttyGNSS ttyS0 ttyUSB0 ttyUSB1 ttyUSB2 serial0 ttyS1 ttyS2 ttyS3 ttyS4 ttyS5; do
+            [[ -e /dev/$port ]] || continue
             for port_speed in 115200 57600 38400 19200 9600; do
                 echo 'DETECTION ON ' $port ' at ' $port_speed
                 if [[ $(python3 "${rtkbase_path}"/tools/ubxtool -f /dev/$port -s $port_speed -p MON-VER -w 5 2>/dev/null) =~ 'ZED-F9P' ]]; then
