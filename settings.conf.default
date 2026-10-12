@@ -80,7 +80,25 @@ file_overlap_time='0'
 archive_name=$file_name.7z
 #archives older than this value (in days) will be deleted by archive_and_clean.sh
 archive_rotate='3'
-#minum free space on device (in MB) before oldest archives are deleted
+# GNSS data is kept in RAM to spare the SD card: datadir is a tmpfs (see
+# mount_tmpfs.sh), str2str records into it and archive_and_clean.sh
+# compresses and uploads from it. Size limit of that RAM disk in MB (only
+# what is actually stored uses RAM). Re-run 'sudo ./mount_tmpfs.sh' and
+# reboot after changing it. Trade-off: whatever is still in RAM when power
+# is lost is gone - upload windows keep that to the last few hours.
+ram_data_max_mb='256'
+# Compressed archives still waiting for upload (e.g. an LTE outage) may use
+# at most this much of the RAM disk; beyond that - or once the RAM disk is
+# more than 75% full - the oldest ones are moved to overflow_dir on the SD
+# card, so the recording itself never runs out of room.
+ram_pending_max_mb='128'
+# SD-card overflow for archives that no longer fit in RAM, capped at
+# sd_overflow_max_mb. Past the cap, or when the card has less than
+# min_free_space MB free, the oldest overflow archives are deleted (logged
+# as errors), so a long outage can never fill the card and hang the system.
+overflow_dir=$BASEDIR/data_overflow
+sd_overflow_max_mb='4000'
+#minimum free space on the SD card (in MB) before oldest overflow archives are deleted
 min_free_space='500'
 
 [ntrip_A]

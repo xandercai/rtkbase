@@ -45,8 +45,8 @@ MPPT_TMP="/tmp/rtkbase_mppt_${HOSTNAME}.json"
 THERMAL_TMP="/tmp/rtkbase_thermal_${HOSTNAME}.json"
 TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
 
-# LOGS_DIR is on the SD card, so it survives a reboot - unlike /tmp (tmpfs,
-# see mount_tmpfs.sh) - which is exactly what STEP 0 and STEP 5b below need
+# LOGS_DIR is on the SD card, so it survives a reboot - unlike /tmp and the
+# data dir (tmpfs, see mount_tmpfs.sh) - which is what STEP 0 and STEP 5b need
 # to leave a trail through a stuck machine someone eventually power-cycles.
 LOGS_DIR="${BASEDIR}/logs"
 mkdir -p "${LOGS_DIR}"
@@ -335,9 +335,14 @@ fi
 #
 # Each closed raw file is compressed once and the raw file deleted right
 # away; from then on the .7z is the only local copy, and rclone move
-# deletes it once it's on Drive. The raw file used to be kept until its
-# upload succeeded, so during an LTE outage every hour of data sat on the
-# SD card twice (raw + .7z) and was recompressed every cycle.
+# deletes it once it's on Drive.
+#
+# Storage tiers: str2str records into datadir, which is a RAM disk (tmpfs,
+# see mount_tmpfs.sh) so the SD card isn't worn by a continuous write
+# stream. Archives waiting for upload only move to OVERFLOW_DIR on the SD
+# card once they no longer fit in RAM (STEP 5), and that is capped too.
+OVERFLOW_DIR="${overflow_dir:-${BASEDIR}/data_overflow}"
+mkdir -p "${OVERFLOW_DIR}"
 
 # str2str_file names its output after receiver_format (run_cast.sh's
 # out_file): .ubx for the F9P, but .rtcm3 for the UM980 and .sbf for the
@@ -345,20 +350,34 @@ fi
 # compressed, uploaded or deleted - it just piled up on the SD card.
 raw_ext="${receiver_format:-ubx}"
 
-for file in *."${raw_ext}"; do
+# total size of the .7z archives in a directory, in MB
+_archives_mb() {
+    find "$1" -maxdepth 1 -name '*.7z' -printf '%s\n' 2>/dev/null | awk '{s += $1} END {print int(s / 1048576)}'
+}
+# oldest .7z in a directory - by mtime, which -stl below sets to the
+# recording time rather than the compression time
+_oldest_archive() {
+    find "$1" -maxdepth 1 -name '*.7z' -printf '%T@ %p\n' 2>/dev/null | sort -n | head -n 1 | cut -d' ' -f2-
+}
+_archive_count() {
+    find "$1" -maxdepth 1 -name '*.7z' 2>/dev/null | wc -l
+}
+
+# Raw files normally only exist in datadir; OVERFLOW_DIR can hold some
+# right after mount_tmpfs.sh moved an old SD-card data dir's content there.
+for file in "${datadir}"/*."${raw_ext}" "${OVERFLOW_DIR}"/*."${raw_ext}"; do
     [[ -e "$file" ]] || continue
 
     if [[ $(find "$file" -mmin +1) ]]; then
-        echo "Compressing raw data file: $file"
+        echo "Compressing raw data file: $(basename "$file")"
         # -mx=5 -md=16m instead of -mx=9 -md=128m: the latter can need well
         # over 1 GB of RAM on a large file, which a Pi 3B+ doesn't have, and
         # it's several times slower - eating into the LTE online window -
         # for a few percent of size on already-dense raw GNSS data.
         # -mmt=2 leaves the other cores to str2str. -stl stamps the .7z with
-        # the raw file's own mtime, so STEP 5's "delete the oldest first"
-        # goes by recording time rather than by when it got compressed.
-        # Output is kept (not sent to /dev/null) so a failure says why in
-        # journalctl.
+        # the raw file's own mtime, so STEP 5's "oldest first" goes by
+        # recording time rather than by when it got compressed. Output is
+        # kept (not sent to /dev/null) so a failure says why in journalctl.
         sevenz_name="${file%.*}_${HOSTNAME}.7z"
         # a .7z left over from a run killed mid-compression would otherwise
         # have this file appended into it as a second copy
@@ -373,10 +392,10 @@ for file in *."${raw_ext}"; do
     fi
 done
 
-# Upload every pending .7z, including ones left over from earlier failed
-# runs - not only when this run happened to compress something new.
-pending_archives=( *.7z )
-[[ -e "${pending_archives[0]}" ]] || pending_archives=()
+# Upload every pending .7z - RAM first (it's what a power cut would lose),
+# then the SD overflow - including ones left over from earlier failed runs.
+pending_ram=$(_archive_count "${datadir}")
+pending_sd=$(_archive_count "${OVERFLOW_DIR}")
 
 # A client uploading through the master's eth0 share only has the master's
 # LTE window: the master goes back to airplane mode lte_online_minutes after
@@ -384,66 +403,84 @@ pending_archives=( *.7z )
 # upload hold only covers its own run. Stop starting new transfers a minute
 # before that instead of having them cut off mid-file; whatever is left
 # simply goes next cycle. Doesn't apply when the client is on WiFi.
-gnss_deadline_flags=()
 uplink_dev=$(ip route get 8.8.8.8 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')
-if [ "$NETWORK_ROLE" = "client" ] && [ "$uplink_dev" = "eth0" ] && [ ${#pending_archives[@]} -gt 0 ]; then
-    window_s=$(( (${lte_online_minutes:-10} - ${lte_on_before_minutes:-2} - 1) * 60 ))
-    remaining_s=$(( window_s - ($(date +%s) - SCRIPT_START) ))
-    if [ "$remaining_s" -lt 30 ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Master's LTE window is about to close, leaving ${#pending_archives[@]} GNSS archive(s) for the next cycle."
-        pending_archives=()
-    else
-        gnss_deadline_flags=(--max-duration "${remaining_s}s" --cutoff-mode soft)
-    fi
-fi
+client_via_master=0
+[ "$NETWORK_ROLE" = "client" ] && [ "$uplink_dev" = "eth0" ] && client_via_master=1
+window_s=$(( (${lte_online_minutes:-10} - ${lte_on_before_minutes:-2} - 1) * 60 ))
+# sets gnss_deadline_flags; fails if there's no time left in the window
+_set_deadline_flags() {
+    gnss_deadline_flags=()
+    [ "$client_via_master" -eq 1 ] || return 0
+    local remaining_s=$(( window_s - ($(date +%s) - SCRIPT_START) ))
+    [ "$remaining_s" -ge 30 ] || return 1
+    gnss_deadline_flags=(--max-duration "${remaining_s}s" --cutoff-mode soft)
+}
 
-if [ ${#pending_archives[@]} -gt 0 ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of ${#pending_archives[@]} GNSS archive(s) to Google Drive..."
-    # Routed through _rclone_upload_or_warn like the other three sources
-    # (see its own comment above) so a failure says why (rate limit, auth,
-    # timeout...) in journalctl. rclone move only deletes a local .7z once
-    # that file is on Drive, so a partial failure just leaves the rest for
-    # the next run.
-    if _rclone_upload_or_warn "$RCLONE_LOG_GNSS" "GNSS batch" move "./" "${GDRIVE_GNSS_REMOTE}" \
-        --config "${RCLONE_CONF_TMP}" \
-        --no-update-modtime \
-        --include "*.7z" \
-        --transfers 4 \
-        --checkers 8 \
-        --tpslimit 10 \
-        --timeout 60s \
-        --contimeout 30s \
-        --retries 3 \
-        --low-level-retries 10 \
-        --log-level INFO \
-        "${gnss_deadline_flags[@]}"
-    then
-        any_upload_succeeded=1
-    fi
+if [ $((pending_ram + pending_sd)) -gt 0 ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading $((pending_ram + pending_sd)) GNSS archive(s) to Google Drive (RAM: ${pending_ram}, SD overflow: ${pending_sd})..."
+    for upload_dir in "${datadir}" "${OVERFLOW_DIR}"; do
+        [ "$(_archive_count "$upload_dir")" -gt 0 ] || continue
+        if ! _set_deadline_flags; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - Master's LTE window is about to close, leaving the remaining GNSS archives for the next cycle."
+            break
+        fi
+        # Routed through _rclone_upload_or_warn like the other sources (see
+        # its own comment above) so a failure says why (rate limit, auth,
+        # timeout...) in journalctl. rclone move only deletes a local .7z
+        # once that file is on Drive, so a partial failure just leaves the
+        # rest for the next run.
+        if _rclone_upload_or_warn "$RCLONE_LOG_GNSS" "GNSS batch (${upload_dir})" move "${upload_dir}/" "${GDRIVE_GNSS_REMOTE}" \
+            --config "${RCLONE_CONF_TMP}" \
+            --no-update-modtime \
+            --include "*.7z" \
+            --transfers 4 \
+            --checkers 8 \
+            --tpslimit 10 \
+            --timeout 60s \
+            --contimeout 30s \
+            --retries 3 \
+            --low-level-retries 10 \
+            --log-level INFO \
+            "${gnss_deadline_flags[@]}"
+        then
+            any_upload_succeeded=1
+        fi
+    done
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS archives uploaded this cycle."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS archives to upload."
 fi
 
-# ----------------- STEP 5: FREE-SPACE GUARD -----------------
-# During a long LTE outage nothing leaves the station, and a full SD card
-# stops str2str from writing anything at all (and destabilises the rest of
-# the system with it). Below min_free_space MB, drop the OLDEST pending
-# archives first, so the newest data and the file being recorded right now
-# survive. Every deletion is logged to stderr so it shows up as an error.
-min_free_mb="${min_free_space:-500}"
-if [[ "$min_free_mb" =~ ^[0-9]+$ ]] && [ "$min_free_mb" -gt 0 ]; then
-    free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
-    if [[ "$free_mb" =~ ^[0-9]+$ ]] && [ "$free_mb" -lt "$min_free_mb" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: only ${free_mb} MB free (< ${min_free_mb} MB), deleting oldest un-uploaded GNSS archives." >&2
-        while [ "$free_mb" -lt "$min_free_mb" ]; do
-            oldest=$(ls -1tr -- *.7z 2>/dev/null | head -n 1)
-            [ -n "$oldest" ] || break
-            echo "    deleting un-uploaded archive to free space: $oldest" >&2
-            rm -f -- "$oldest"
-            free_mb=$(df -Pm . | awk 'NR==2 {print $4}')
-        done
-    fi
-fi
+# ----------------- STEP 5: RAM -> SD SPILL, SD CAP -----------------
+# During an LTE outage nothing leaves the station. Keep the RAM disk
+# comfortably free for the file being recorded: once the archives waiting
+# in RAM exceed ram_pending_max_mb, or the RAM disk is more than 75% full,
+# move the oldest to the SD overflow. The overflow in turn never grows past
+# sd_overflow_max_mb nor leaves less than min_free_space MB free on the
+# card - beyond that the oldest overflow archives are deleted, logged as
+# errors, rather than letting a full card stop str2str and hang the system.
+ram_pending_max="${ram_pending_max_mb:-128}" ; [[ "$ram_pending_max" =~ ^[0-9]+$ ]] || ram_pending_max=128
+sd_overflow_max="${sd_overflow_max_mb:-4000}" ; [[ "$sd_overflow_max" =~ ^[0-9]+$ ]] || sd_overflow_max=4000
+min_free_mb="${min_free_space:-500}" ; [[ "$min_free_mb" =~ ^[0-9]+$ ]] || min_free_mb=500
+
+while :; do
+    ram_archives_mb=$(_archives_mb "${datadir}")
+    ram_used_pct=$(df -P "${datadir}" | awk 'NR==2 {sub("%", "", $5); print $5}')
+    [ "$ram_archives_mb" -gt "$ram_pending_max" ] || [ "${ram_used_pct:-0}" -gt 75 ] || break
+    oldest=$(_oldest_archive "${datadir}")
+    [ -n "$oldest" ] || break
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Moving $(basename "$oldest") from RAM to the SD overflow (archives in RAM: ${ram_archives_mb} MB, RAM disk ${ram_used_pct}% used)."
+    mv -- "$oldest" "${OVERFLOW_DIR}/" || break
+done
+
+while :; do
+    overflow_mb=$(_archives_mb "${OVERFLOW_DIR}")
+    sd_free_mb=$(df -Pm "${OVERFLOW_DIR}" | awk 'NR==2 {print $4}')
+    [ "$overflow_mb" -gt "$sd_overflow_max" ] || [ "${sd_free_mb:-0}" -lt "$min_free_mb" ] || break
+    oldest=$(_oldest_archive "${OVERFLOW_DIR}")
+    [ -n "$oldest" ] || break
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Warning: deleting un-uploaded archive $(basename "$oldest") (SD overflow ${overflow_mb}/${sd_overflow_max} MB, ${sd_free_mb} MB free on the card)." >&2
+    rm -f -- "$oldest"
+done
 
 rm -f "$RCLONE_LOG_GNSS" "$RCLONE_LOG_JOURNAL" "$RCLONE_LOG_MPPT" "$RCLONE_LOG_THERMAL"
 

@@ -127,12 +127,19 @@ else
 fi
 
 section "Storage / logs"
-free_mb=$(df -Pm "${datadir}" | awk 'NR==2 {print $4}')
-[ "$free_mb" -ge "${min_free_space:-500}" ] && pass "${free_mb} MB free on the data partition" \
-                                             || fail "only ${free_mb} MB free (min_free_space=${min_free_space:-500})"
-awk '$1=="tmpfs" && ($2=="/var/log" || $2 ~ /data\/?$/) {found=1} END {exit !found}' /etc/fstab \
-    && fail "/etc/fstab still puts /var/log or the data dir on tmpfs - run 'sudo ./mount_tmpfs.sh' and reboot" \
-    || pass "data and logs are on the SD card"
+overflow="${overflow_dir:-${BASEDIR}/data_overflow}"
+if [ "$(findmnt -n -o FSTYPE --target "${datadir}" 2>/dev/null)" = "tmpfs" ]; then
+    pass "data dir in RAM: $(df -Ph "${datadir}" | awk 'NR==2 {print $3 " used of " $2}')"
+else
+    fail "data dir ${datadir} is not a RAM disk - run 'sudo ./mount_tmpfs.sh' and reboot"
+fi
+overflow_n=$(find "$overflow" -maxdepth 1 -name '*.7z' 2>/dev/null | wc -l)
+[ "$overflow_n" -gt 0 ] && warn "${overflow_n} archive(s) waiting in the SD overflow ($(du -sh "$overflow" | cut -f1))"
+free_mb=$(df -Pm "$overflow" 2>/dev/null | awk 'NR==2 {print $4}')
+[ "${free_mb:-0}" -ge "${min_free_space:-500}" ] && pass "${free_mb} MB free on the SD card" \
+                                                 || fail "only ${free_mb} MB free on the SD card (min_free_space=${min_free_space:-500})"
+awk '$1=="tmpfs" && $2=="/var/log" {found=1} END {exit !found}' /etc/fstab \
+    && fail "/etc/fstab still puts /var/log on tmpfs - run 'sudo ./mount_tmpfs.sh' and reboot"
 [ -d /var/log/journal ] && pass "persistent journal enabled" || warn "journal is not persistent (sudo ./mount_tmpfs.sh)"
 unit_active rtkbase_web.service && warn "web UI is running (web_ui_enabled) - not needed in the field"
 
