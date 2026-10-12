@@ -182,7 +182,7 @@ fi
 # skipped, and risks losing time on the one thing that already tolerates
 # being late instead.
 
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and compress new .ubx files in ${datadir} every ${file_rotate_time} hour..."
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and compress new .${receiver_format:-ubx} files in ${datadir} every ${file_rotate_time} hour..."
 
 cd "${datadir}" || exit 1
 
@@ -323,16 +323,28 @@ fi
 # such recovery if this run runs out of time or network).
 processed_files=()
 
-for file in *.ubx; do
+# str2str_file names its output after receiver_format (run_cast.sh's
+# out_file): .ubx for the F9P, but .rtcm3 for the UM980 and .sbf for the
+# mosaic-X5. Hard-coding *.ubx here meant a UM980 station's data was never
+# compressed, uploaded or deleted - it just piled up on the SD card.
+raw_ext="${receiver_format:-ubx}"
+
+for file in *."${raw_ext}"; do
     [[ -e "$file" ]] || continue
 
     if [[ $(find "$file" -mmin +1) ]]; then
         echo "Compressing raw data file: $file"
-        7z a -t7z -m0=lzma2 -mx=9 -md=128m -mfb=273 -ms=on -mhc=on "${file%.*}_${HOSTNAME}.7z" "$file" >/dev/null 2>&1
-        if [ $? -eq 0 ]; then
+        # -mx=5 -md=16m instead of -mx=9 -md=128m: the latter can need well
+        # over 1 GB of RAM on a large file, which a Pi 3B+ doesn't have, and
+        # it's several times slower - eating into the LTE online window -
+        # for a few percent of size on already-dense raw GNSS data.
+        # -mmt=2 leaves the other cores to str2str. Output is kept (not
+        # sent to /dev/null) so a failure says why in journalctl.
+        if compress_output=$(7z a -t7z -m0=lzma2 -mx=5 -md=16m -mmt=2 "${file%.*}_${HOSTNAME}.7z" "$file" 2>&1); then
             processed_files+=("$file")
         else
             echo "Compression failed for: $file"
+            echo "$compress_output" | tail -n 5 | sed 's/^/    /'
             rm -f "${file%.*}_${HOSTNAME}.7z"
         fi
     fi
@@ -371,10 +383,10 @@ else
 fi
 
 # ----------------- STEP 5: CLEANUP -----------------
-# Only the GNSS upload's own log decides whether local .ubx sources are safe
+# Only the GNSS upload's own log decides whether local raw sources are safe
 # to delete - it must never be influenced by the other three sources.
 if [ ${#processed_files[@]} -gt 0 ]; then
-    echo "Cleaning up local source .ubx files..."
+    echo "Cleaning up local raw source files (.${raw_ext})..."
     for file in "${processed_files[@]}"; do
         sevenz_name="${file%.*}_${HOSTNAME}.7z"
         if [ ! -f "$sevenz_name" ] && grep -q -E "Moved|Copied" "$RCLONE_LOG_GNSS" 2>/dev/null; then
