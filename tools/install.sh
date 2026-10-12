@@ -405,6 +405,14 @@ rtkbase_requirements(){
       then
         cp "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf"
       fi
+      # Add any keys new in settings.conf.default to an existing settings.conf
+      # (existing values win) and expand $BASEDIR paths. The web UI used to
+      # be the only thing doing this, at its own startup - it's now off by
+      # default (web_ui_enabled), so do it here. Standard library only, so
+      # the system python3 is enough - no venv needed yet.
+      sudo -u "${RTKBASE_USER}" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from RTKBaseConfigManager import RTKBaseConfigManager; RTKBaseConfigManager(sys.argv[2], sys.argv[3])' \
+        "${rtkbase_path}/web_app" "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf" \
+        || echo 'Warning: could not merge new settings.conf.default entries into settings.conf'
       # Auto-detect the LTE modem AT port. Each supported modem's udev rule
       # (90-usb-simcom-at.rules for the SIMCOM A76XX/SIM7600G-H,
       # 92-usb-teltonika-at.rules for the Teltonika Calyx EBD021/EDB021)
@@ -508,9 +516,9 @@ install_unit_files() {
       then 
         #Install unit files
         "${rtkbase_path}"/tools/copy_unit.sh --python_path "${rtkbase_path}"/venv/bin/python --user "${RTKBASE_USER}"
-        # web_ui_enabled defaults to '1' in settings.conf.default - only
-        # skip enabling the admin GUI if a station explicitly opted out
-        # before this ran (see settings.conf's [web] section).
+        # web_ui_enabled defaults to '0' in settings.conf.default; anything
+        # but an explicit '0' (e.g. an older settings.conf saying '1')
+        # enables the admin GUI (see settings.conf's [web] section).
         grep -qE "^web_ui_enabled='0'" "${rtkbase_path}"/settings.conf 2>/dev/null || systemctl enable rtkbase_web.service
         systemctl enable rtkbase_archive.timer
         systemctl daemon-reload
@@ -959,7 +967,13 @@ start_services() {
   echo 'STARTING SERVICES'
   echo '################################'
   systemctl daemon-reload
-  grep -qE "^web_ui_enabled='0'" "${rtkbase_path}"/settings.conf 2>/dev/null || systemctl enable --now rtkbase_web.service
+  if grep -qE "^web_ui_enabled='0'" "${rtkbase_path}"/settings.conf 2>/dev/null
+  then
+    # also turns it off on a station where an earlier install had enabled it
+    systemctl disable --now rtkbase_web.service 2>/dev/null
+  else
+    systemctl enable --now rtkbase_web.service
+  fi
   systemctl enable --now str2str_tcp.service
   systemctl enable --now str2str_file.service
   systemctl restart gpsd.service
@@ -997,7 +1011,8 @@ start_services() {
   fi
   echo '################################'
   echo 'END OF INSTALLATION'
-  echo 'You can open your browser to http://'"$(hostname -I)"
+  grep -qE "^web_ui_enabled='0'" "${rtkbase_path}"/settings.conf 2>/dev/null \
+    || echo 'You can open your browser to http://'"$(hostname -I)"
   #If the user isn't already in dialout/systemd-journal group, a reboot is
   #mandatory to be able to access /dev/tty* and the full system journal
   groups "${RTKBASE_USER}" | grep -q "dialout" || echo "But first, Please REBOOT!!!"

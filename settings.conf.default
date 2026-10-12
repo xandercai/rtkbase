@@ -352,11 +352,11 @@ thermal_sensor_present='0'
 [web]
 # Whether install.sh enables and starts rtkbase_web.service (the local
 # admin/config GUI on web_port above - unrelated to rtkdashboard, which
-# is a separate, read-only project). Defaults on, matching every install
-# before this flag existed. Set to '0' before running install.sh for a
-# station that's configured entirely through settings.conf/SSH and never
-# needs the GUI - it has no remote-access story anyway (it's plain HTTP
-# on the LAN/localhost, not exposed through Tailscale), so leaving it
-# running on a headless field station is pure attack surface for no
-# benefit.
-web_ui_enabled='1'
+# is a separate, read-only project). Off by default: these stations are
+# configured through settings.conf/SSH, and the GUI is a liability on
+# them - it runs as root on 0.0.0.0:80 (reachable from the whole tailnet,
+# not just the LAN), ships with upstream's default password, and its
+# "Update" button installs upstream Stefal/rtkbase releases over this
+# fork, wiping out the LTE/MPPT/upload customisations. Set to '1' before
+# running install.sh only if you really need it.
+web_ui_enabled='0'
