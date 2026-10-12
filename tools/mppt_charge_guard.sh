@@ -21,9 +21,10 @@
 
 BASEDIR="$(dirname "$0")/.."
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+source "${BASEDIR}/tools/hw_detect.sh"
 
-if [ -z "${mppt_port}" ] || [ ! -e "${mppt_port}" ]; then
-    echo "mppt_charge_guard: no MPPT adapter (${mppt_port:-mppt_port empty}), nothing to do."
+if ! mppt_port=$(resolve_mppt_port); then
+    echo "mppt_charge_guard: no MPPT adapter on this station, nothing to do."
     exit 0
 fi
 

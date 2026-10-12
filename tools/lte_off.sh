@@ -20,6 +20,7 @@
 
 BASEDIR="$(dirname "$0")/.."
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+source "${BASEDIR}/tools/hw_detect.sh"
 
 HOLD_FLAG="/tmp/rtkbase_lte_hold"
 MANUAL_HOLD_FLAG="/tmp/rtkbase_lte_hold_manual"
@@ -28,13 +29,13 @@ if [ -f "$HOLD_FLAG" ] || [ -f "$MANUAL_HOLD_FLAG" ]; then
     exit 0
 fi
 
-if [ -z "${modem_at_port}" ]; then
-    echo "lte_off: modem_at_port is empty, nothing to do."
+if ! MODEM_PORT=$(resolve_modem_port); then
+    echo "lte_off: no LTE modem on this station, nothing to do."
     exit 0
 fi
 
 "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" \
-    --port "${modem_at_port}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=0"
+    --port "${MODEM_PORT}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=0"
 
 # No radio during airplane mode, so there's nothing for Tailscale to connect
 # over. Stop tailscaled itself (kills its background DERP/netcheck retry

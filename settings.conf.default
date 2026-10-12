@@ -202,10 +202,28 @@ logdir=$BASEDIR/logs
 level=0
 
 [network]
-#lte modem port
+# LTE modem AT port. '' (or 'auto') = use /dev/ttymodemAT whenever a
+# supported modem is plugged in (its udev rule creates that link), checked
+# at run time - nothing needs to be attached during install. 'none' = never
+# use a modem on this station. Any other value is used as a fixed path.
 modem_at_port=''
 #lte modem AT port baudrate (115200 for the Waveshare SIM7600G-H HAT)
 modem_baudrate='115200'
+
+# Decided at every boot by tools/network_role.sh (rtkbase_network_role.timer):
+#   'auto'   - 'master' if an LTE modem shows up within modem_wait_seconds
+#              after boot, 'client' otherwise
+#   'master' - uplink over the LTE modem (usb0); with lte_share='1', also
+#              serves a client Pi on eth0 (192.168.100.1/24, DHCP + NAT) -
+#              but only when nothing else answers DHCP on eth0, so plugged
+#              into an office/home LAN it stays an ordinary LAN client
+#   'client' - no modem: eth0 waits for a master (or any router) as a DHCP
+#              client; WiFi, when connected, is preferred over eth0
+# WiFi networks configured at install time keep auto-connecting in every
+# role, for SSH access on site.
+network_role='auto'
+lte_share='1'
+modem_wait_seconds='60'
 
 [lte]
 # Power-saving schedule: keep the LTE modem in airplane mode (AT+CFUN=0)
@@ -231,6 +249,9 @@ lte_schedule_mode='fixed_window'
 # lte_modem_on.timer. In fixed_window mode this is the actual on-duration;
 # in upload_window mode it's the safety-net ceiling. Must be comfortably
 # longer than lte_on_before_minutes + how long uploads usually take.
+# When a master shares its LTE with a client Pi, both stations' uploads
+# have to fit in this window (a client stops starting new GNSS transfers a
+# minute before it closes) - use the same value on both, e.g. 15.
 lte_online_minutes='10'
 
 # Consecutive archive_and_clean.sh cycles with zero successful uploads
@@ -266,11 +287,12 @@ tailscale_watchdog_interval='5'
 tailscale_watchdog_boot_delay='2'
 
 [mppt]
-# EPEVER Tracer RS485-USB adapter. Left empty means "no MPPT hardware
-# configured" and archive_and_clean.sh will skip the mppt upload step.
-# Run install.sh --detect-mppt with the adapter plugged in to fill this in:
-# it creates a udev rule pinning the adapter's own USB serial number to
-# /dev/epever485 so it can never be confused with the LTE modem's ports.
+# EPEVER Tracer RS485-USB adapter. '' (or 'auto') = use /dev/epever485
+# whenever the adapter is plugged in, checked at run time (udev rule
+# 93-epever485.rules creates that link from its USB ID, so it can never be
+# confused with the LTE modem's ports). 'none' = never use one. Optionally
+# run install.sh --detect-mppt with the adapter plugged in to also pin its
+# USB serial number.
 mppt_port=''
 mppt_baudrate='115200'
 mppt_slave_id='1'

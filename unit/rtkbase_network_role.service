@@ -1,0 +1,11 @@
+[Unit]
+Description=RTKBase - detect LTE master/client role and configure NetworkManager
+After=NetworkManager.service systemd-udev-settle.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/bin/bash {script_path}/tools/network_role.sh
+StandardOutput=journal
+StandardError=journal

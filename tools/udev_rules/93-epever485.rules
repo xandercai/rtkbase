@@ -1,0 +1,8 @@
+# EPEVER MPPT RS485-USB adapter (WCH CH343, 1a86:55d3) -> /dev/epever485.
+# Matched on USB ID alone so an adapter first plugged in in the field is
+# picked up with no 'install.sh --detect-mppt' run (that still works, and
+# additionally pins the adapter's serial number in 92-epever.rules).
+# Safe as long as nothing else on the station uses a CH343: the F9P is
+# native USB, the UM980 sits behind a PL2303 and the LTE modems have their
+# own vendor IDs.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", SYMLINK+="epever485", GROUP="dialout"

@@ -133,7 +133,9 @@ install_dependencies() {
     echo 'INSTALLING DEPENDENCIES'
     echo '################################'
       apt-get "${APT_TIMEOUT}" update -y || exit 1
-      apt-get "${APT_TIMEOUT}" install -y git build-essential pps-tools python3-pip python3-venv python3-dev python3-setuptools python3-wheel python3-serial libsystemd-dev bc dos2unix socat zip unzip pkg-config psmisc proj-bin nftables rclone p7zip-full || exit 1
+      apt-get "${APT_TIMEOUT}" install -y git build-essential pps-tools python3-pip python3-venv python3-dev python3-setuptools python3-wheel python3-serial libsystemd-dev bc dos2unix socat zip unzip pkg-config psmisc proj-bin nftables rclone p7zip-full dnsmasq-base || exit 1
+      # dnsmasq-base: NetworkManager's "shared" mode (the LTE master serving
+      # a client Pi on eth0, see tools/network_role.sh) needs it for DHCP
       apt-get "${APT_TIMEOUT}" install -y libxml2-dev libxslt-dev || exit 1 # needed for lxml (for pystemd)
       apt-get "${APT_TIMEOUT}" install -y vim || exit 1 # optional
       #apt-get "${APT_TIMEOUT}" upgrade -y
@@ -830,21 +832,23 @@ _add_modem_port(){
 }
 
 _configure_modem(){
-  "${rtkbase_path}"/tools/lte_network_mgmt.sh --connection_rename
   # modem_config.py (via the vendored sim_modem lib) only speaks SIMCOM's AT
   # command set - on a Teltonika Calyx it dies partway through (e.g. its
   # network-mode query) with an unhandled exception. That modem's data
   # interface doesn't need this step anyway: rndis_host binds its usb0
   # interface automatically (see 92-usb-teltonika-at.rules), unlike SIMCOM
-  # which needs this script's AT commands to switch into ECM mode. Don't
-  # let a failure here block --lte_priority below, which is a plain nmcli
-  # route-metric change with no modem-specific AT commands involved - the
-  # two are unrelated.
+  # which needs this script's AT commands to switch into ECM mode (stored
+  # in the modem itself, so this only needs doing once per modem).
   sudo -u "${RTKBASE_USER}" "${rtkbase_path}/venv/bin/python" "${rtkbase_path}"/tools/modem_config.py --config
   if [ $? -ne 0 ]; then
-    echo "Warning: modem_config.py failed (expected on non-SIMCOM modems, e.g. Teltonika Calyx, which only need connection_rename/lte_priority below - not this SIMCOM-specific ECM-mode setup)."
+    echo "Warning: modem_config.py failed (expected on non-SIMCOM modems, e.g. Teltonika Calyx, which don't need this SIMCOM-specific ECM-mode setup)."
   fi
-  "${rtkbase_path}"/tools/lte_network_mgmt.sh --lte_priority
+  # NetworkManager profiles for usb0/eth0 are owned by network_role.sh
+  # (also run at every boot by rtkbase_network_role.timer). It replaces the
+  # old lte_network_mgmt.sh --connection_rename/--lte_priority calls, whose
+  # "Cellular Modem" profile fought setup_lte_share.sh's lte-usb0 one.
+  rm -f /run/rtkbase/network_role
+  bash "${rtkbase_path}"/tools/network_role.sh
 }
 
 detect_mppt() {
@@ -968,14 +972,22 @@ start_services() {
   # also depends on the same broken sim_modem handshake that lte_at.py was
   # written to route around, so it never actually completes anyway - see
   # tools/modem_check.py.
-  # Power-saving LTE schedule: only relevant once modem_at_port is set (see
-  # tools/lte_hold.sh / lte_release.sh for the manual SSH override)
-  grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now lte_modem_on.timer
-  grep -qE "^modem_at_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now lte_modem_off.timer
-  # Low-temperature MPPT charge guard: only relevant once mppt_port is set
-  grep -qE "^mppt_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now mppt_charge_guard.timer
+  # The LTE and MPPT timers are enabled unconditionally: their scripts
+  # resolve the hardware at run time (tools/hw_detect.sh) and exit quietly
+  # when it isn't there. Enabling them only if the modem/adapter happened to
+  # be plugged in during install meant a station installed in the office and
+  # completed in the field silently never got its LTE schedule or its
+  # cold-charge guard.
+  # Power-saving LTE schedule (see tools/lte_hold.sh / lte_release.sh for
+  # the manual SSH override)
+  systemctl enable --now lte_modem_on.timer
+  systemctl enable --now lte_modem_off.timer
+  # Low-temperature MPPT charge guard
+  systemctl enable --now mppt_charge_guard.timer
   # 1-minute load power sampler feeding the dashboard's avg/min/max series
-  grep -qE "^mppt_port='/[[:alnum:]]+.*'" "${rtkbase_path}"/settings.conf && systemctl enable --now mppt_power_sample.timer
+  systemctl enable --now mppt_power_sample.timer
+  # LTE master/client role + eth0 sharing, decided at every boot
+  systemctl enable --now rtkbase_network_role.timer
   grep -q "receiver='Septentrio_Mosaic-X5'" "${rtkbase_path}"/settings.conf && systemctl enable --now rtkbase_gnss_web_proxy.service
   # Enable Tailscale watchdog timer (checks every 5 minutes)
   if command -v tailscale &>/dev/null; then
@@ -1105,8 +1117,10 @@ main() {
     [[ $ARG_ALL == 'repo' ]] && [[ "${ARG_RTKBASE_REPO}" == "0" ]] && { echo 'you have to specify the branch with --rtkbase-repo' ; exit 1 ;}
     [[ $ARG_ALL == 'url' ]] && [[ "${ARG_RTKBASE_SRC}" == "0" ]] && { echo 'you have to specify the url with --rtkbase-custom' ; exit 1 ;}
     #Okay launching installation
+    # Tailscale failing to install (e.g. no route to tailscale.com yet) is
+    # worth a warning, not a reason to skip installing RTKBase itself.
     install_dependencies && \
-    install_tailscale    && \
+    { install_tailscale || echo 'Warning: Tailscale installation failed - continuing without it. Rerun install.sh later or install it by hand.' ; true ;} && \
     case $ARG_ALL in
       release)
         install_rtkbase_from_release

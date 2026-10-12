@@ -14,9 +14,9 @@
 
 BASEDIR="$(dirname "$0")/.."
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+source "${BASEDIR}/tools/hw_detect.sh"
 
-[ -z "${mppt_port}" ] && exit 0
-[ -e "${mppt_port}" ] || exit 0
+mppt_port=$(resolve_mppt_port) || exit 0
 
 SAMPLE_FILE="/tmp/rtkbase_mppt_power_$(hostname).csv"
 

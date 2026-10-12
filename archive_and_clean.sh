@@ -15,6 +15,13 @@ HOSTNAME=$(hostname)
 
 # Load configuration variables
 source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+source "${BASEDIR}/tools/hw_detect.sh"
+# Hardware is resolved now rather than trusted from install time - see
+# tools/hw_detect.sh. Empty means "not on this station".
+MODEM_PORT=$(resolve_modem_port)
+MPPT_PORT=$(resolve_mppt_port)
+NETWORK_ROLE=$(current_network_role)
+SCRIPT_START=$(date +%s)
 
 GDRIVE_GNSS_REMOTE="gdrive:GNSS_IR_Data"
 GDRIVE_JOURNAL_REMOTE="gdrive:GNSS_IR_JOURNAL"
@@ -153,17 +160,17 @@ trap release_lte_hold EXIT
 # being present.
 if [ "${lte_reset_after_failed_cycles:-0}" -gt 0 ] 2>/dev/null \
     && [ "$PRIOR_FAILED_CYCLES" -ge "${lte_reset_after_failed_cycles}" ] \
-    && [ -n "${modem_at_port}" ]
+    && [ -n "${MODEM_PORT}" ]
 then
     if [ -f "$MANUAL_HOLD_FLAG" ]; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} cycles in a row, but a manual SSH hold is active - skipping modem reset."
     elif ! _network_reachable; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads have failed ${PRIOR_FAILED_CYCLES} consecutive cycles and the network is unreachable - power-cycling the LTE modem before retrying..."
         "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" \
-            --port "${modem_at_port}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=0"
+            --port "${MODEM_PORT}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=0"
         sleep 5
         "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" \
-            --port "${modem_at_port}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=1"
+            --port "${MODEM_PORT}" --baudrate "${modem_baudrate:-115200}" --cmd "AT+CFUN=1"
         # Give the modem a moment to re-register with the network before
         # STEP 1 below starts relying on it - a bare CFUN=1 returns long
         # before the modem has actually found a cell tower.
@@ -176,7 +183,7 @@ fi
 # Upload order deliberately puts the small, no-retry-if-missed sources
 # (MPPT/thermal/journal - one-shot snapshots; a failed upload here is just
 # gone, nothing keeps a copy to retry) ahead of GNSS (large, and already
-# self-healing - see STEP 4/5 below: an unsynced .ubx just stays on disk
+# self-healing - see STEP 4 below: an unsynced .7z just stays on disk
 # and gets picked up again next run, no data actually lost). If this run
 # is having a slow/flaky-network day, that ordering spends the good early
 # part of its network budget on the things that can't recover from being
@@ -188,13 +195,13 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') - Scan and compress new .${receiver_format:-u
 cd "${datadir}" || exit 1
 
 # ----------------- STEP 1: MPPT STATUS (point-in-time snapshot) -----------------
-# mppt_port is only set once install.sh --detect-mppt has paired the
-# RS485-USB adapter with a udev symlink. Empty means no MPPT hardware here.
-if [ -n "${mppt_port}" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading MPPT status from ${mppt_port}..."
+# MPPT_PORT is the /dev/epever485 udev symlink whenever the RS485 adapter
+# is plugged in (see tools/hw_detect.sh). Empty means no MPPT hardware here.
+if [ -n "${MPPT_PORT}" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading MPPT status from ${MPPT_PORT}..."
     if flock -w 30 /run/lock/rtkbase_epever485.lock \
         "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/mppt_read.py" \
-        --port "${mppt_port}" --baudrate "${mppt_baudrate:-115200}" --slave-id "${mppt_slave_id:-1}" \
+        --port "${MPPT_PORT}" --baudrate "${mppt_baudrate:-115200}" --slave-id "${mppt_slave_id:-1}" \
         > "${MPPT_TMP}"
     then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading MPPT snapshot to Google Drive..."
@@ -214,7 +221,7 @@ if [ -n "${mppt_port}" ]; then
     fi
     rm -f "${MPPT_TMP}"
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - MPPT not configured (mppt_port is empty), skipping."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - No MPPT adapter on this station, skipping."
 fi
 
 # ----------------- STEP 1b: MPPT LOAD POWER SAMPLES (1-min series) -----------------
@@ -242,13 +249,15 @@ if [ -s "${POWER_SAMPLES}" ]; then
 fi
 
 # ----------------- STEP 2: THERMAL SENSOR (point-in-time snapshot) -----------------
-# thermal_sensor_present is only '1' once install.sh --detect-thermal has
-# confirmed a DS18B20 actually answers on the 1-Wire bus (see
-# settings.conf's [thermal] section). Empty/'0' means no sensor wired here -
-# don't burn a cycle attempting and warning about a read that will never
-# succeed. battery_temperature_c in the MPPT snapshot (STEP 1) covers this
-# station on the dashboard instead, at no extra upload cost.
-if [ "${thermal_sensor_present:-0}" = "1" ]; then
+# Read whenever a DS18B20 is actually on the 1-Wire bus right now, or
+# install.sh flagged one (the overlay itself is only loaded if install.sh
+# found a sensor, see settings.conf's [thermal] section). Otherwise skip
+# quietly rather than warn every cycle about a read that can't work -
+# battery_temperature_c in the MPPT snapshot (STEP 1) covers this station
+# on the dashboard instead, at no extra upload cost.
+if [ "${thermal_sensor_present:-0}" = "1" ] \
+    || find /sys/bus/w1/devices -maxdepth 1 -name '28-*' -print -quit 2>/dev/null | grep -q .
+then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Reading thermal sensor..."
     if bash "${BASEDIR}/tools/thermal_read.sh" > "${THERMAL_TMP}"; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploading thermal snapshot to Google Drive..."
@@ -268,7 +277,7 @@ if [ "${thermal_sensor_present:-0}" = "1" ]; then
     fi
     rm -f "${THERMAL_TMP}"
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Thermal sensor not detected (thermal_sensor_present is not '1'), skipping."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - No DS18B20 thermal sensor on this station, skipping."
 fi
 
 # ----------------- STEP 3: SYSTEM JOURNAL (continuous log) -----------------
@@ -369,6 +378,25 @@ done
 pending_archives=( *.7z )
 [[ -e "${pending_archives[0]}" ]] || pending_archives=()
 
+# A client uploading through the master's eth0 share only has the master's
+# LTE window: the master goes back to airplane mode lte_online_minutes after
+# waking (lte_on_before_minutes before this run started), and its own
+# upload hold only covers its own run. Stop starting new transfers a minute
+# before that instead of having them cut off mid-file; whatever is left
+# simply goes next cycle. Doesn't apply when the client is on WiFi.
+gnss_deadline_flags=()
+uplink_dev=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \K\S+')
+if [ "$NETWORK_ROLE" = "client" ] && [ "$uplink_dev" = "eth0" ] && [ ${#pending_archives[@]} -gt 0 ]; then
+    window_s=$(( (${lte_online_minutes:-10} - ${lte_on_before_minutes:-2} - 1) * 60 ))
+    remaining_s=$(( window_s - ($(date +%s) - SCRIPT_START) ))
+    if [ "$remaining_s" -lt 30 ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Master's LTE window is about to close, leaving ${#pending_archives[@]} GNSS archive(s) for the next cycle."
+        pending_archives=()
+    else
+        gnss_deadline_flags=(--max-duration "${remaining_s}s" --cutoff-mode soft)
+    fi
+fi
+
 if [ ${#pending_archives[@]} -gt 0 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') - Starting batch upload of ${#pending_archives[@]} GNSS archive(s) to Google Drive..."
     # Routed through _rclone_upload_or_warn like the other three sources
@@ -387,12 +415,13 @@ if [ ${#pending_archives[@]} -gt 0 ]; then
         --contimeout 30s \
         --retries 3 \
         --low-level-retries 10 \
-        --log-level INFO
+        --log-level INFO \
+        "${gnss_deadline_flags[@]}"
     then
         any_upload_succeeded=1
     fi
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS files ready for upload."
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - No GNSS archives uploaded this cycle."
 fi
 
 # ----------------- STEP 5: FREE-SPACE GUARD -----------------
@@ -467,10 +496,19 @@ fi
 # Release our hold explicitly here (rather than waiting for the EXIT trap):
 # lte_off.sh below checks the same flag and would otherwise refuse to power
 # down, defeating upload_window mode's whole point.
+#
+# A master currently sharing LTE over eth0 doesn't switch off early: the
+# client Pi behind it may still be uploading, and this script can't see
+# that. lte_modem_off.timer's fixed deadline - which the client's own
+# upload deadline is computed against - still applies.
 release_lte_hold
 if [ "${lte_schedule_mode:-fixed_window}" = "upload_window" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done (upload_window mode), switching LTE modem off..."
-    bash "${BASEDIR}/tools/lte_off.sh"
+    if [ "$NETWORK_ROLE" = "master" ] && nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx 'lte-share-eth0'; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done, but LTE is shared with a client Pi - leaving the modem on until the fixed lte_online_minutes deadline."
+    else
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Uploads done (upload_window mode), switching LTE modem off..."
+        bash "${BASEDIR}/tools/lte_off.sh"
+    fi
 fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') - Batch job finished."
