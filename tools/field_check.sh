@@ -33,6 +33,19 @@ fi
 section "Time"
 if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then pass "system clock synchronized ($(date '+%F %T %Z'))"
 else fail "system clock NOT synchronized - file names and upload windows depend on it (chronyc sources -v)"; fi
+if [ -f /etc/fake-hwclock.data ]; then
+    saved_age_min=$(( ($(date +%s) - $(date -u -d "$(cat /etc/fake-hwclock.data)" +%s)) / 60 ))
+    [ "$saved_age_min" -le 30 ] && pass "time for the next boot saved ${saved_age_min} min ago" \
+                                || fail "saved boot time is ${saved_age_min} min old - is rtkbase_clock_save.timer running?"
+else
+    fail "no saved time (fake-hwclock) - after a power cut the clock restarts at the image date (install.sh --gpsd-chrony)"
+fi
+unit_enabled rtkbase_clock_save.timer || fail "rtkbase_clock_save.timer not enabled"
+grep -q '^makestep 1 -1' /etc/chrony/chrony.conf \
+    || warn "chrony only steps the clock during its first updates (set 'makestep 1 -1' in /etc/chrony/chrony.conf)"
+gnss_reach=$(chronyc -n sources 2>/dev/null | awk '$2=="GNSS" {print $5}')
+[ -n "$gnss_reach" ] && [ "$gnss_reach" != "0" ] && pass "GNSS time source reachable (chrony)" \
+    || warn "GNSS time source not reachable - without network the clock can't be corrected"
 
 section "Network role / LTE"
 role=$(current_network_role)

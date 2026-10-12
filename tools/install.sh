@@ -174,6 +174,20 @@ install_gpsd_chrony() {
       systemctl stop systemd-timesyncd > /dev/null 2>&1
       systemctl disable systemd-timesyncd > /dev/null 2>&1
       systemctl mask systemd-timesyncd > /dev/null 2>&1
+      #The Pi has no RTC and timesyncd was what restored the last known time
+      #at boot. Without it every boot starts at the image date until chrony
+      #syncs. fake-hwclock restores the saved time at boot, and
+      #rtkbase_clock_save.timer saves it every 10 min.
+      apt-get "${APT_TIMEOUT}" install fake-hwclock -y || exit 1
+      fake-hwclock save
+      #Allow chrony to step the clock at any time, not only in its first 3
+      #updates: a station may only get a time source long after boot.
+      if grep -q '^makestep' /etc/chrony/chrony.conf
+      then
+        sed -i 's/^makestep .*/makestep 1 -1/' /etc/chrony/chrony.conf
+      else
+        echo 'makestep 1 -1' >> /etc/chrony/chrony.conf
+      fi
       #Adding GPS as source for chrony
       grep -q 'set larger delay to allow the GPS' /etc/chrony/chrony.conf || echo '# set larger delay to allow the GPS source to overlap with the other sources and avoid the falseticker status
 ' >> /etc/chrony/chrony.conf
@@ -987,6 +1001,8 @@ start_services() {
   systemctl enable --now mppt_power_sample.timer
   # LTE master/client role + eth0 sharing, decided at every boot
   systemctl enable --now rtkbase_network_role.timer
+  # save the time regularly, the Pi has no RTC
+  systemctl enable --now rtkbase_clock_save.timer
   grep -q "receiver='Septentrio_Mosaic-X5'" "${rtkbase_path}"/settings.conf && systemctl enable --now rtkbase_gnss_web_proxy.service
   # Enable Tailscale watchdog timer (checks every 5 minutes)
   if command -v tailscale &>/dev/null; then

@@ -1,0 +1,8 @@
+[Unit]
+Description=RTKBase - save the current time for the next boot (no RTC)
+
+[Service]
+Type=oneshot
+User=root
+# fake-hwclock never saves a time earlier than the one already stored
+ExecStart=/usr/sbin/fake-hwclock save

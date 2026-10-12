@@ -1,0 +1,10 @@
+[Unit]
+Description=RTKBase - save the current time every 10 minutes
+
+[Timer]
+# stations usually lose power without a clean shutdown
+OnBootSec=10min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
