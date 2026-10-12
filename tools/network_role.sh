@@ -15,10 +15,14 @@
 #           master (or any router), WiFi stays as configured at install
 #           time and wins the default route whenever it's connected.
 #
-# Route metrics (lower wins): eth0 LAN client 100 (master) / 700 (client),
-# lte-usb0 200, WiFi 600 (NetworkManager's default). So on a master an
-# office LAN beats LTE and LTE beats WiFi; on a client WiFi beats the
-# master link.
+# Route metrics (lower wins): eth0 as a LAN client 100 (master) / 700
+# (client: that link is just the master's LTE), WiFi 600 (NetworkManager's
+# default), lte-usb0 800. So whenever WiFi is connected, traffic uses it
+# and LTE data isn't spent; LTE only carries traffic without WiFi. Nothing
+# else changes with WiFi - the LTE on/off schedule, uploads and Tailscale
+# all run exactly as without it. A WiFi that is connected but can't reach
+# the internet (phone hotspot with mobile data off) is temporarily demoted
+# below LTE, see check_wifi_route().
 #
 # settings.conf: network_role='auto'|'master'|'client', lte_share='1'|'0',
 # modem_wait_seconds (how long to wait at boot for the modem to enumerate).
@@ -113,8 +117,11 @@ disable_competing_profiles() {
 
 apply_master_profiles() {
     ensure_con "$LTE_CON" "$LTE_IFACE" \
-        ipv4.method auto ipv4.route-metric 200 ipv6.route-metric 200 \
+        ipv4.method auto ipv4.route-metric 800 ipv6.route-metric 800 \
         connection.autoconnect yes connection.autoconnect-priority 20
+    # an already-active lte-usb0 (e.g. created with metric 200 by an older
+    # version) only picks the new metric up on reapply
+    con_active "$LTE_CON" && nmcli device reapply "$LTE_IFACE" >/dev/null
     ensure_con "$ETH_CON" "$ETH_IFACE" \
         ipv4.method auto ipv4.route-metric 100 ipv4.dhcp-timeout "$DHCP_PROBE_SECONDS" \
         connection.autoconnect yes connection.autoconnect-priority 10
@@ -156,6 +163,41 @@ maybe_share_eth0() {
     nmcli connection up "$SHARE_CON" >/dev/null || log "failed to bring up ${SHARE_CON}"
 }
 
+# ------------------------------------------------- WiFi without internet ---
+WIFI_IFACE="wlan0"
+# worse than LTE (800) and a client's master link (700)
+WIFI_PENALTY_METRIC=950
+
+_wifi_reaches_internet() {
+    ping -I "$WIFI_IFACE" -c 2 -W 3 1.1.1.1 >/dev/null 2>&1 && return 0
+    ping -I "$WIFI_IFACE" -c 2 -W 3 8.8.8.8 >/dev/null 2>&1 && return 0
+    # networks that filter ping; a captive portal answers something else
+    # than 204 and correctly counts as "no internet"
+    [ "$(curl --interface "$WIFI_IFACE" -s -m 6 -o /dev/null -w '%{http_code}' \
+        http://connectivitycheck.gstatic.com/generate_204 2>/dev/null)" = "204" ]
+}
+
+# A WiFi that is connected but doesn't reach the internet would otherwise
+# keep the default route and black-hole every upload while LTE sits idle.
+# Demote it below LTE/eth0 until it works again. Only the running device
+# is changed (nmcli device modify / reapply) - never the saved WiFi
+# profile - so the next association starts from its normal priority.
+check_wifi_route() {
+    local metric
+    metric=$(ip -4 route show default dev "$WIFI_IFACE" 2>/dev/null \
+        | awk '{for (i = 1; i < NF; i++) if ($i == "metric") {print $(i + 1); exit}}')
+    [ -n "$metric" ] || return 0     # WiFi not connected / no default route
+    if _wifi_reaches_internet; then
+        if [ "$metric" = "$WIFI_PENALTY_METRIC" ]; then
+            log "WiFi reaches the internet again - it takes priority over LTE again."
+            nmcli device reapply "$WIFI_IFACE" >/dev/null
+        fi
+    elif [ "$metric" != "$WIFI_PENALTY_METRIC" ]; then
+        log "WiFi is connected but doesn't reach the internet - routing via LTE/eth0 until it does."
+        nmcli device modify "$WIFI_IFACE" ipv4.route-metric "$WIFI_PENALTY_METRIC" ipv6.route-metric "$WIFI_PENALTY_METRIC" >/dev/null
+    fi
+}
+
 # ---------------------------------------------------------------- main ---
 role=$(detect_role)
 if [ "$role" != "$previous_role" ]; then
@@ -164,4 +206,5 @@ if [ "$role" != "$previous_role" ]; then
     echo "$role" > "${NETWORK_ROLE_FILE}"
 fi
 [ "$role" = "master" ] && maybe_share_eth0
+check_wifi_route
 exit 0

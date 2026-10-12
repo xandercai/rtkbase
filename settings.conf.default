@@ -238,7 +238,10 @@ modem_baudrate='115200'
 #   'client' - no modem: eth0 waits for a master (or any router) as a DHCP
 #              client; WiFi, when connected, is preferred over eth0
 # WiFi networks configured at install time keep auto-connecting in every
-# role, for SSH access on site.
+# role, for SSH access on site, and whenever WiFi is connected (and really
+# reaches the internet) traffic uses it rather than LTE - in either role.
+# Nothing else changes with WiFi: the LTE schedule, uploads and Tailscale
+# run exactly as without it.
 network_role='auto'
 lte_share='1'
 modem_wait_seconds='60'
