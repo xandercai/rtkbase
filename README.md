@@ -32,13 +32,13 @@ A ready to flash Armbian image is available for Raspberry Pi, Orange Pi Zero, Or
 For older Raspberry Pi releases, see [here](https://github.com/jancelin/pi-gen/releases/latest).
 
 ## Installation (field station):
-Install on office WiFi; the station then works as soon as it is powered up in the field.
+Install on office WiFi; the station then works as soon as it is powered up in the field. Run every command as the normal user (e.g. `griuser`), over SSH. RTKBase ends up in `~/rtkbase`.
 
 1. **Flash** Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager. In the advanced settings set a unique hostname (e.g. `gripi003`, it is used in uploaded file names and in Tailscale), user/password, SSH, the office WiFi (country NZ) and the time zone.
 
 2. **Connect** the GNSS receiver (F9P or UM980), and the DS18B20 if the station has one. The LTE modem and the MPPT adapter are optional at this point, they are detected at every boot.
 
-3. **Install**:
+3. **Install** (from the home directory, this is where `rtkbase` gets cloned):
 
    ```bash
    cd ~
@@ -47,17 +47,17 @@ Install on office WiFi; the station then works as soon as it is powered up in th
    sudo ./install.sh --all repo --rtkbase-repo master
    ```
 
-   Waveshare SIM7600 only, the first time a modem is used (switches it to ECM mode, stored in the modem): connect it and run `sudo ./install.sh --detect-modem`. Not needed for the Teltonika.
+   Waveshare SIM7600 only, the first time a modem is used (switches it to ECM mode, stored in the modem): connect it and run `sudo ~/rtkbase/tools/install.sh --detect-modem`. Not needed for the Teltonika.
 
 4. **Storage** (data in RAM, persistent journal):
 
    ```bash
-   cd ~/rtkbase && sudo ./mount_tmpfs.sh
+   sudo ~/rtkbase/mount_tmpfs.sh
    ```
 
 5. **Tailscale**: `sudo tailscale up` and log in. Then disable key expiry for the machine in the Tailscale admin console. If you use flags (e.g. `--ssh`), put the same ones in `tailscale_up_flags` in `~/rtkbase/settings.conf`.
 
-6. **rclone**: as the normal user (no sudo), either copy `~/.config/rclone/rclone.conf` from a working station, or run `rclone config` and create a Google Drive remote named `gdrive` (use `rclone authorize "drive"` on a PC for the browser step).
+6. **rclone**, without sudo: either copy `~/.config/rclone/rclone.conf` from a working station, or run `rclone config` and create a Google Drive remote named `gdrive` (use `rclone authorize "drive"` on a PC for the browser step). Check with `rclone lsd gdrive:`.
 
 7. Optional, **phone hotspot** for SSH on site (the phone doesn't need to be on):
 
@@ -65,12 +65,21 @@ Install on office WiFi; the station then works as soon as it is powered up in th
    sudo nmcli connection add type wifi con-name hotspot ifname wlan0 ssid "<ssid>" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "<password>"
    ```
 
-8. Only for a **master/client pair** sharing one LTE modem: set `lte_online_minutes='15'` in `~/rtkbase/settings.conf` on both, then `cd ~ && sudo ./install.sh --unit-files`.
+8. Only for a **master/client pair** sharing one LTE modem: set `lte_online_minutes='15'` in `~/rtkbase/settings.conf` on both, then:
+
+   ```bash
+   sudo ~/rtkbase/tools/install.sh --unit-files
+   ```
 
 9. **Reboot and check**, with the GNSS antenna seeing the sky:
 
    ```bash
    sudo reboot
+   ```
+
+   After the reboot, log in again and run:
+
+   ```bash
    ~/rtkbase/tools/field_check.sh
    ```
 
@@ -81,13 +90,17 @@ Install on office WiFi; the station then works as soon as it is powered up in th
 The LTE modem, the MPPT adapter and the master/client role are detected at every boot (see the `[network]` section of settings.conf). WiFi is always preferred over LTE when it has internet. The web UI is disabled by default (`web_ui_enabled`).
 
 ## Updating an existing station:
+Older settings.conf files keep `web_ui_enabled='1'`: set it to `'0'` first to turn the web UI off.
+
 ```bash
-cd ~/rtkbase && git pull
-sudo ./tools/install.sh --dependencies --rtkbase-requirements --unit-files --gpsd-chrony --start-services
-sudo ./mount_tmpfs.sh
+git -C ~/rtkbase checkout -- unit/
+git -C ~/rtkbase pull
+sudo ~/rtkbase/tools/install.sh --dependencies --rtkbase-requirements --unit-files --gpsd-chrony --start-services
+sudo ~/rtkbase/mount_tmpfs.sh
 sudo reboot
 ```
-Older settings.conf files keep `web_ui_enabled='1'`: set it to `'0'` before running `install.sh` to turn the web UI off. After the reboot, run `~/rtkbase/tools/field_check.sh`.
+
+The first line drops the timer files that older versions of copy_unit.sh rewrote in place, otherwise `git pull` refuses to update. After the reboot, run `~/rtkbase/tools/field_check.sh`.
 
 ## Manual installation: 
 The `install.sh` script can be used without the `--all` option to split the installation process into several different steps:
