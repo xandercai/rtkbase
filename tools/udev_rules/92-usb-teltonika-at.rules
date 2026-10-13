@@ -19,7 +19,11 @@
 # usb-serial bus under the "option1" driver name, NOT /sys/bus/usb/drivers/
 # option/ (that one is only the thin per-device probe wrapper and has no
 # new_id attribute).
-ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="1d12", ATTRS{idProduct}=="0101", RUN+="/bin/sh -c 'modprobe option 2>/dev/null; echo 1d12 0101 > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'"
+# The third field (interface class ff) limits option to the vendor-specific
+# interfaces 2-5. Without it, option also claimed the RNDIS interfaces 0/1
+# whenever this ran before rndis_host bound them, and usb0 never appeared
+# for that boot.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="1d12", ATTRS{idProduct}=="0101", RUN+="/bin/sh -c 'modprobe option 2>/dev/null; echo 1d12 0101 ff > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'"
 
 # idVendor/idProduct live on the USB device node while bInterfaceNumber lives
 # on the USB interface (child) node, and udev requires every ATTRS{} in one

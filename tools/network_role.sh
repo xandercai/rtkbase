@@ -127,6 +127,51 @@ apply_client_profiles() {
     disable_competing_profiles
 }
 
+# ------------------------------------------------- master: modem netdev ---
+# The Teltonika's RNDIS interfaces could be claimed by the option serial
+# driver before rndis_host got them (then no usb0). 92-usb-teltonika-at.rules
+# now limits option to vendor-specific interfaces; this repairs a boot where
+# it already happened by handing the RNDIS interface back to rndis_host.
+modem_usb_dev() {
+    # sysfs dir of the USB device the AT port belongs to
+    local tty dev
+    tty=$(basename "$(readlink -f /dev/ttymodemAT)")
+    dev=$(readlink -f "/sys/class/tty/${tty}/device") || return 1
+    dirname "$(dirname "$dev")"
+}
+
+modem_has_netdev() {
+    local n
+    for n in /sys/class/net/*; do
+        [[ "$(readlink -f "$n/device" 2>/dev/null)" == "$1"/* ]] && return 0
+    done
+    return 1
+}
+
+repair_modem_netdev() {
+    local usbdev intf i rndis="" data=""
+    [ -e /dev/ttymodemAT ] || return 0
+    # give the modem time to finish enumerating after it (re)appeared
+    [ $(( $(date +%s) - $(stat -c %Y /dev/ttymodemAT) )) -ge 30 ] || return 0
+    usbdev=$(modem_usb_dev) && [ -d "$usbdev" ] || return 0
+    modem_has_netdev "$usbdev" && return 0
+    for intf in "$usbdev"/*:*; do
+        case "$(cat "$intf/bInterfaceClass" 2>/dev/null)" in
+            e0) rndis=$(basename "$intf") ;;
+            0a) data=$(basename "$intf") ;;
+        esac
+    done
+    if [ -z "$rndis" ]; then
+        log "LTE modem has no network interface, and no RNDIS interface to bind"
+        return 0
+    fi
+    log "LTE modem has no network interface - handing ${rndis} back to rndis_host"
+    for i in "$rndis" "$data"; do
+        [ -n "$i" ] && [ -e "$usbdev/$i/driver" ] && echo "$i" > "$usbdev/$i/driver/unbind"
+    done
+    echo "$rndis" > /sys/bus/usb/drivers/rndis_host/bind || log "binding ${rndis} to rndis_host failed"
+}
+
 # ------------------------------------------------- master: eth0 sharing ---
 maybe_share_eth0() {
     [ "${lte_share:-1}" = "1" ] || return 0
@@ -181,6 +226,9 @@ if [ "$role" != "$previous_role" ]; then
     if [ "$role" = "master" ]; then apply_master_profiles; else apply_client_profiles; fi
     echo "$role" > "${NETWORK_ROLE_FILE}"
 fi
-[ "$role" = "master" ] && maybe_share_eth0
+if [ "$role" = "master" ]; then
+    repair_modem_netdev
+    maybe_share_eth0
+fi
 check_wifi_route
 exit 0
