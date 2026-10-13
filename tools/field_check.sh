@@ -53,7 +53,13 @@ role=$(current_network_role)
 case "$role" in
     master) pass "role: master (LTE modem present)" ;;
     client) pass "role: client (no LTE modem)" ;;
-    *)      fail "role unknown - rtkbase_network_role.timer hasn't run (systemctl status rtkbase_network_role.timer)" ;;
+    *)
+        if [ "$(systemctl show -p ActiveState --value rtkbase_network_role.service 2>/dev/null)" = "activating" ]; then
+            warn "role detection still running (waits up to ${modem_wait_seconds:-60}s after boot for a modem) - run this check again in a minute"
+        else
+            fail "role unknown - rtkbase_network_role.timer hasn't run (systemctl status rtkbase_network_role.timer)"
+        fi
+        ;;
 esac
 unit_enabled rtkbase_network_role.timer || fail "rtkbase_network_role.timer not enabled"
 if modem=$(resolve_modem_port); then
