@@ -65,9 +65,37 @@ unit_enabled rtkbase_network_role.timer || fail "rtkbase_network_role.timer not 
 if modem=$(resolve_modem_port); then
     pass "LTE modem AT port: ${modem}"
     for u in lte_modem_on.timer lte_modem_off.timer; do unit_enabled "$u" || fail "$u not enabled"; done
-    ip -4 addr show usb0 2>/dev/null | grep -q inet \
-        && pass "usb0 has an address: $(ip -4 -o addr show usb0 | awk '{print $4}')" \
-        || warn "usb0 has no address right now (normal while the modem is in airplane mode between windows)"
+    # network interface and connection (both exist even in airplane mode)
+    if [ -e /sys/class/net/usb0 ]; then
+        pass "LTE network interface usb0: $(ip -4 -o addr show usb0 2>/dev/null | awk '{print $4}')"
+    else
+        fail "LTE modem has no network interface (usb0) - see journalctl -u rtkbase_network_role"
+    fi
+    nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null | grep -qx 'lte-usb0:usb0' \
+        && pass "connection lte-usb0 active" \
+        || fail "connection lte-usb0 not active (nmcli connection show)"
+    # radio, registration, signal, internet
+    at() { "${BASEDIR}/venv/bin/python" "${BASEDIR}/tools/lte_at.py" --port "$modem" --baudrate "${modem_baudrate:-115200}" --cmd "$1" 2>/dev/null ; }
+    cfun=$(at "AT+CFUN?" | grep -oE '\+CFUN: *[0-9]+' | grep -oE '[0-9]+$')
+    case "$cfun" in
+        1)
+            stat=$(at "AT+CEREG?" | grep -oE '\+CEREG: *[0-9]+,[0-9]+' | cut -d, -f2)
+            case "$stat" in 1) reg="registered" ;; 5) reg="registered (roaming)" ;; 2) reg="searching" ;; 3) reg="registration denied" ;; *) reg="not registered" ;; esac
+            rssi=$(at "AT+CSQ" | grep -oE '\+CSQ: *[0-9]+' | grep -oE '[0-9]+$')
+            if [ -n "$rssi" ] && [ "$rssi" != "99" ]; then signal="$(( -113 + 2 * rssi )) dBm (CSQ ${rssi})"; else signal="unknown"; fi
+            if ping -I usb0 -c 2 -W 5 8.8.8.8 >/dev/null 2>&1; then
+                pass "LTE reaches the internet - ${reg}, signal ${signal}"
+            else
+                fail "LTE radio is on but no internet through usb0 - ${reg}, signal ${signal}"
+            fi
+            ;;
+        0|4)
+            warn "LTE radio is off (airplane mode between upload windows), internet not tested - run ~/rtkbase/tools/lte_hold.sh, this check again, then ~/rtkbase/tools/lte_release.sh"
+            ;;
+        *)
+            fail "LTE modem doesn't answer AT+CFUN? on ${modem}"
+            ;;
+    esac
     [ "${lte_online_minutes:-10}" -lt 15 ] && [ "${lte_share:-1}" = "1" ] \
         && warn "lte_online_minutes=${lte_online_minutes:-10}: if a client Pi shares this LTE, both uploads must fit - 15 is safer"
 elif [ "$role" = "master" ]; then
