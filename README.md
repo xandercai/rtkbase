@@ -77,7 +77,7 @@ Install on office WiFi; the station then works as soon as it is powered up in th
    sudo reboot
    ```
 
-   After the reboot, log in again and run:
+   Wait 2-3 minutes after the reboot (role detection waits up to a minute for a modem), log in again and run:
 
    ```bash
    ~/rtkbase/tools/field_check.sh
