@@ -36,7 +36,7 @@ Install on office WiFi; the station then works as soon as it is powered up in th
 
 1. **Flash** Raspberry Pi OS Lite (64-bit) with Raspberry Pi Imager. In the advanced settings set a unique hostname (e.g. `gripi003`, it is used in uploaded file names and in Tailscale), user/password, SSH, the office WiFi (country NZ) and the time zone.
 
-2. **Connect** the GNSS receiver (F9P or UM980), and the DS18B20 if the station has one. The LTE modem and the MPPT adapter are optional at this point, they are detected at every boot.
+2. **Connect** the GNSS receiver (F9P or UM980; for an F9P its native USB port), and the DS18B20 if the station has one. The install writes the RTKBase configuration into the receiver; a receiver swapped in later needs `sudo ~/rtkbase/tools/install.sh --detect-gnss --configure-gnss --start-services` once (field_check.sh tells if raw observations are missing). The LTE modem and the MPPT adapter are optional at this point, they are detected at every boot.
 
 3. **Install** (from the home directory, this is where `rtkbase` gets cloned):
 

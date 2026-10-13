@@ -30,6 +30,35 @@ elif [ $(( $(date +%s) - $(stat -c %Y "$newest") )) -lt 120 ]; then
 else
     fail "newest raw file $(basename "$newest") hasn't grown for $(( ($(date +%s) - $(stat -c %Y "$newest")) / 60 )) min"
 fi
+# raw observations, i.e. the receiver was configured by install.sh
+# (a new receiver usually outputs NMEA only)
+if [ -n "$newest" ] && [ "${receiver_format:-ubx}" != "sbf" ]; then
+    if [ "$(stat -c %s "$newest")" -lt 20000 ]; then
+        warn "$(basename "$newest") too small yet to check for raw observations - run this check again in a minute"
+    else
+        raw=$(python3 - "$newest" "${receiver_format:-ubx}" <<'EOF'
+import sys
+path, fmt = sys.argv[1], sys.argv[2]
+data = open(path, "rb").read()[-300000:]
+if fmt == "ubx":
+    print("RXM-RAWX" if b"\xb5\x62\x02\x15" in data else "")
+elif fmt == "rtcm3":
+    found = set()
+    i = 0
+    while True:
+        i = data.find(b"\xd3", i)
+        if i < 0 or i + 5 > len(data):
+            break
+        if data[i + 1] & 0xFC == 0:
+            found.add((data[i + 3] << 4) | (data[i + 4] >> 4))
+        i += 1
+    print(",".join(str(m) for m in sorted(found) if 1071 <= m <= 1137))
+EOF
+)
+        [ -n "$raw" ] && pass "raw observations recorded (${raw})" \
+                      || fail "no raw observations in $(basename "$newest") - receiver not configured? sudo ~/rtkbase/tools/install.sh --detect-gnss --configure-gnss --start-services"
+    fi
+fi
 
 section "Time"
 if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then pass "system clock synchronized ($(date '+%F %T %Z'))"
