@@ -7,7 +7,8 @@
 LOG_PREFIX="$(date '+%Y-%m-%d %H:%M:%S') [tailscale-watchdog]"
 
 BASEDIR="$(dirname "$0")/.."
-source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+# skip settings.conf's own BASEDIR line, it would point to this script's dir
+source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' | grep -v '^BASEDIR=' )
 
 # ── 0. Any internet at all? (e.g. a client outside the master's LTE window) ─
 if ! ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 && ! ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then

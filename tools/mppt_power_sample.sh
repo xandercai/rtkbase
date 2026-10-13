@@ -13,7 +13,8 @@
 # so two processes never open the same RS485 serial port at once.
 
 BASEDIR="$(dirname "$0")/.."
-source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+# skip settings.conf's own BASEDIR line, it would point to this script's dir
+source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' | grep -v '^BASEDIR=' )
 source "${BASEDIR}/tools/hw_detect.sh"
 
 mppt_port=$(resolve_mppt_port) || exit 0

@@ -4,7 +4,8 @@
 # Read-only. Exit code = number of FAILs.
 
 BASEDIR="$(cd "$(dirname "$0")/.." && pwd)"
-source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+# skip settings.conf's own BASEDIR line, it would point to this script's dir
+source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' | grep -v '^BASEDIR=' )
 source "${BASEDIR}/tools/hw_detect.sh"
 
 fails=0 ; warns=0
@@ -141,7 +142,8 @@ else
 fi
 overflow_n=$(find "$overflow" -maxdepth 1 -name '*.7z' 2>/dev/null | wc -l)
 [ "$overflow_n" -gt 0 ] && warn "${overflow_n} archive(s) waiting in the SD overflow ($(du -sh "$overflow" | cut -f1))"
-free_mb=$(df -Pm "$overflow" 2>/dev/null | awk 'NR==2 {print $4}')
+[ -d "$overflow" ] && sd_dir="$overflow" || sd_dir="$BASEDIR"
+free_mb=$(df -Pm "$sd_dir" 2>/dev/null | awk 'NR==2 {print $4}')
 [ "${free_mb:-0}" -ge "${min_free_space:-500}" ] && pass "${free_mb} MB free on the SD card" \
                                                  || fail "only ${free_mb} MB free on the SD card (min_free_space=${min_free_space:-500})"
 awk '$1=="tmpfs" && $2=="/var/log" {found=1} END {exit !found}' /etc/fstab \

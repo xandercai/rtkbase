@@ -19,7 +19,8 @@
 # neither side can ever delete a hold it didn't create.
 
 BASEDIR="$(dirname "$0")/.."
-source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+# skip settings.conf's own BASEDIR line, it would point to this script's dir
+source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' | grep -v '^BASEDIR=' )
 source "${BASEDIR}/tools/hw_detect.sh"
 
 HOLD_FLAG="/tmp/rtkbase_lte_hold"

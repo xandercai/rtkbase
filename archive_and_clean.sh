@@ -12,7 +12,8 @@ BASEDIR="$(cd "$(dirname "$0")" && pwd)"
 HOSTNAME=$(hostname)
 
 # Load configuration variables
-source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' )
+# skip settings.conf's own BASEDIR line, it would point to this script's dir
+source <( grep -v '^#' "${BASEDIR}"/settings.conf | grep '=' | grep -v '^BASEDIR=' )
 source "${BASEDIR}/tools/hw_detect.sh"
 # empty = not present on this station (see tools/hw_detect.sh)
 MODEM_PORT=$(resolve_modem_port)
