@@ -55,7 +55,7 @@ Install on office WiFi; the station then works as soon as it is powered up in th
    sudo ~/rtkbase/mount_tmpfs.sh
    ```
 
-5. **Tailscale**: `sudo tailscale up` and log in. Then disable key expiry for the machine in the Tailscale admin console. If you use flags (e.g. `--ssh`), put the same ones in `tailscale_up_flags` in `~/rtkbase/settings.conf`.
+5. **Tailscale**: `sudo systemctl start tailscaled && sudo tailscale up` and log in (on a master, tailscaled is stopped whenever the LTE modem is in airplane mode; the login is kept). Then disable key expiry for the machine in the Tailscale admin console. If you use flags (e.g. `--ssh`), put the same ones in `tailscale_up_flags` in `~/rtkbase/settings.conf`.
 
 6. **rclone**, without sudo: either copy `~/.config/rclone/rclone.conf` from a working station, or run `rclone config` and create a Google Drive remote named `gdrive` (use `rclone authorize "drive"` on a PC for the browser step). Check with `rclone lsd gdrive:`.
 

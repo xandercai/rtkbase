@@ -96,7 +96,10 @@ failed=$(cat "${BASEDIR}/logs/upload_failure_count" 2>/dev/null || echo 0)
 [ "${failed:-0}" -gt 0 ] && warn "last ${failed} upload cycle(s) failed completely"
 
 section "Remote access (Tailscale)"
-if command -v tailscale >/dev/null 2>&1; then
+if command -v tailscale >/dev/null 2>&1 && ! unit_active tailscaled && resolve_modem_port >/dev/null; then
+    # lte_off.sh stops tailscaled while the modem is in airplane mode
+    warn "tailscaled is stopped (normal on a master between LTE windows) - to check the login: sudo systemctl start tailscaled && tailscale status"
+elif command -v tailscale >/dev/null 2>&1; then
     ts_json=$(tailscale status --json 2>/dev/null)
     state=$(echo "$ts_json" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("BackendState",""))' 2>/dev/null)
     [ "$state" = "Running" ] && pass "Tailscale running as $(tailscale ip -4 2>/dev/null)" \
