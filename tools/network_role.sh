@@ -103,9 +103,13 @@ apply_master_profiles() {
         connection.autoconnect yes connection.autoconnect-priority 20
     # apply the new metric to an already active connection
     con_active "$LTE_CON" && nmcli device reapply "$LTE_IFACE" >/dev/null
+    # no autoconnect on a master: NetworkManager would keep retrying DHCP
+    # towards the client Pi and maybe_share_eth0() would never get eth0
     ensure_con "$ETH_CON" "$ETH_IFACE" \
         ipv4.method auto ipv4.route-metric 100 ipv4.dhcp-timeout "$DHCP_PROBE_SECONDS" \
-        connection.autoconnect yes connection.autoconnect-priority 10
+        connection.autoconnect no
+    con_active "$ETH_CON" && ! ip -4 addr show "$ETH_IFACE" | grep -q inet \
+        && nmcli connection down "$ETH_CON" >/dev/null
     if [ "${lte_share:-1}" = "1" ]; then
         # brought up only by maybe_share_eth0()
         ensure_con "$SHARE_CON" "$ETH_IFACE" \
@@ -173,10 +177,24 @@ repair_modem_netdev() {
 }
 
 # ------------------------------------------------- master: eth0 sharing ---
+# Clamp the TCP MSS of forwarded connections to the route MTU: the LTE link
+# can have an MTU below 1500 that only the master knows about (no-op at 1500).
+ensure_mss_clamp() {
+    nft list table inet rtkbase >/dev/null 2>&1 && return 0
+    nft -f - <<'EOF' || log "could not add the MSS clamping rule"
+table inet rtkbase {
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+        tcp flags syn tcp option maxseg size set rt mtu
+    }
+}
+EOF
+}
+
 maybe_share_eth0() {
     [ "${lte_share:-1}" = "1" ] || return 0
     [ "$(cat /sys/class/net/${ETH_IFACE}/carrier 2>/dev/null)" = "1" ] || return 0
-    con_active "$SHARE_CON" && return 0
+    con_active "$SHARE_CON" && { ensure_mss_clamp; return 0; }
     con_active "$ETH_CON" && return 0
     log "eth0 has a link but no connection - probing for a DHCP server (${DHCP_PROBE_SECONDS}s)..."
     if nmcli --wait $((DHCP_PROBE_SECONDS + 10)) connection up "$ETH_CON" >/dev/null 2>&1; then
@@ -184,7 +202,11 @@ maybe_share_eth0() {
         return 0
     fi
     log "no DHCP server on eth0 - sharing LTE to the client Pi as ${SHARE_ADDR}."
-    nmcli connection up "$SHARE_CON" >/dev/null || log "failed to bring up ${SHARE_CON}"
+    if nmcli connection up "$SHARE_CON" >/dev/null; then
+        ensure_mss_clamp
+    else
+        log "failed to bring up ${SHARE_CON}"
+    fi
 }
 
 # ------------------------------------------------- WiFi without internet ---
