@@ -58,7 +58,13 @@ else
     exit 1
 fi
 
-FILE_ROTATE_TIME=$(grep '^file_rotate_time=' "$conf_file" | cut -d"'" -f2)
+# value of a setting: last occurrence (as when the file is sourced), with or
+# without quotes
+_setting() {
+  grep "^$1=" "$conf_file" | tail -n 1 | cut -d= -f2- | tr -d "'\" \r"
+}
+
+FILE_ROTATE_TIME=$(_setting file_rotate_time)
 
 # if undefined then 1 day for archive and upload
 if [ -z "$FILE_ROTATE_TIME" ]; then FILE_ROTATE_TIME=24; fi
@@ -89,7 +95,7 @@ else
     FILE_ROTATE_INTERVAL="*-*-* 00/${FILE_ROTATE_TIME}:01:02"
 fi
 
-INIT_TIME=$(grep '^init_time=' "$conf_file" | cut -d"'" -f2)
+INIT_TIME=$(_setting init_time)
 # if undefined then 5 minutes for initial GNSS searching delay before first run
 if [ -z "$INIT_TIME" ]; then INIT_TIME=5; fi
 
@@ -105,7 +111,7 @@ TEMPLATE_SUBST+=(-e "s/{{INITIAL_TIME}}/${INIT_TIME}min/g")
 # rtkbase_archive.timer run, on the same wall-clock grid (built from the
 # same FILE_ROTATE_TIME), so the modem is registered on the network with
 # time to spare before archive_and_clean.sh needs to upload.
-LTE_ON_BEFORE=$(grep '^lte_on_before_minutes=' "$conf_file" | cut -d"'" -f2)
+LTE_ON_BEFORE=$(_setting lte_on_before_minutes)
 # if undefined then wake the modem 2 minutes ahead of the upload window
 if [ -z "$LTE_ON_BEFORE" ]; then LTE_ON_BEFORE=2; fi
 
@@ -143,7 +149,7 @@ TEMPLATE_SUBST+=(-e "s/{{LTE_ON_BOOT_SEC}}/${LTE_ON_BOOT_SEC}/g")
 # takes - gives a predictable total online window every cycle (long enough
 # to ssh in) and guarantees the modem doesn't stay on forever if the upload
 # script ever hangs before reaching its own end.
-LTE_ONLINE_MINUTES=$(grep '^lte_online_minutes=' "$conf_file" | cut -d"'" -f2)
+LTE_ONLINE_MINUTES=$(_setting lte_online_minutes)
 # if undefined then keep the modem on for 10 minutes each cycle
 if [ -z "$LTE_ONLINE_MINUTES" ]; then LTE_ONLINE_MINUTES=10; fi
 
@@ -168,7 +174,7 @@ echo 'Configue lte_modem_off.timer.LTE_OFF_BOOT_SEC = ' "$LTE_OFF_BOOT_SEC"
 TEMPLATE_SUBST+=(-e "s/{{LTE_OFF_BOOT_SEC}}/${LTE_OFF_BOOT_SEC}/g")
 
 # dynamic modify mppt_charge_guard.timer
-MPPT_GUARD_CHECK=$(grep '^mppt_charge_check_minutes=' "$conf_file" | cut -d"'" -f2)
+MPPT_GUARD_CHECK=$(_setting mppt_charge_check_minutes)
 # if undefined then check every 20 minutes
 if [ -z "$MPPT_GUARD_CHECK" ]; then MPPT_GUARD_CHECK=20; fi
 
@@ -181,7 +187,7 @@ else
     MPPT_GUARD_CALENDAR="*-*-* *:0/${MPPT_GUARD_CHECK}:00"
 fi
 
-MPPT_GUARD_BOOT_DELAY=$(grep '^mppt_charge_guard_boot_delay=' "$conf_file" | cut -d"'" -f2)
+MPPT_GUARD_BOOT_DELAY=$(_setting mppt_charge_guard_boot_delay)
 # if undefined then wait 2 minutes after boot before the first check
 if [ -z "$MPPT_GUARD_BOOT_DELAY" ]; then MPPT_GUARD_BOOT_DELAY=2; fi
 
@@ -192,7 +198,7 @@ echo 'Configue mppt_charge_guard.timer.MPPT_GUARD_BOOT_DELAY = ' "${MPPT_GUARD_B
 TEMPLATE_SUBST+=(-e "s/{{MPPT_GUARD_BOOT_DELAY}}/${MPPT_GUARD_BOOT_DELAY}min/g")
 
 # dynamic modify tailscale_watchdog.timer
-TS_WATCHDOG_INTERVAL=$(grep '^tailscale_watchdog_interval=' "$conf_file" | cut -d"'" -f2)
+TS_WATCHDOG_INTERVAL=$(_setting tailscale_watchdog_interval)
 # if undefined then check every 5 minutes
 if [ -z "$TS_WATCHDOG_INTERVAL" ]; then TS_WATCHDOG_INTERVAL=5; fi
 
@@ -206,7 +212,7 @@ else
     TS_WATCHDOG_CALENDAR="*-*-* *:0/${TS_WATCHDOG_INTERVAL}:00"
 fi
 
-TS_WATCHDOG_BOOT_DELAY=$(grep '^tailscale_watchdog_boot_delay=' "$conf_file" | cut -d"'" -f2)
+TS_WATCHDOG_BOOT_DELAY=$(_setting tailscale_watchdog_boot_delay)
 # if undefined then wait 2 minutes after boot before the first check
 if [ -z "$TS_WATCHDOG_BOOT_DELAY" ]; then TS_WATCHDOG_BOOT_DELAY=2; fi
 
