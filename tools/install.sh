@@ -431,6 +431,9 @@ rtkbase_requirements(){
       then
         cp "${rtkbase_path}/settings.conf.default" "${rtkbase_path}/settings.conf"
       fi
+      # copied by root above (or by an older install): the rtkbase user edits
+      # it and the merge below runs as that user
+      chown "${RTKBASE_USER}": "${rtkbase_path}/settings.conf"
       # Merge new settings.conf.default keys into settings.conf (existing
       # values are kept). The web UI did this at startup but is off by default.
       sudo -u "${RTKBASE_USER}" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from RTKBaseConfigManager import RTKBaseConfigManager; RTKBaseConfigManager(sys.argv[2], sys.argv[3])' \
