@@ -12,7 +12,9 @@ Description=RTKBase Tcp
 # moment the device reappears (possibly under a new /dev/ttyACM*).
 BindsTo=dev-ttyGNSS.device
 After=dev-ttyGNSS.device
-Wants=str2str_file.service
+# gpsd is PartOf this unit (install.sh), so it stops with it on a replug;
+# pull it back up together with str2str_file
+Wants=str2str_file.service gpsd.service
 
 [Service]
 Type=simple

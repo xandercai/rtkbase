@@ -208,10 +208,13 @@ install_gpsd_chrony() {
 
       #disable hotplug
       sed -i 's/^USBAUTO=.*/USBAUTO="false"/' /etc/default/gpsd
-      #Setting correct input for gpsd
-      sed -i 's/^DEVICES=.*/DEVICES="tcp:\/\/localhost:5015"/' /etc/default/gpsd
+      #Setting correct input for gpsd. 127.0.0.1, not localhost: localhost
+      #resolves to ::1 first, str2str only listens on IPv4, and gpsd then
+      #never connects (no GNSS time for chrony).
+      sed -i 's/^DEVICES=.*/DEVICES="tcp:\/\/127.0.0.1:5015"/' /etc/default/gpsd
       #Adding example for using pps
-      grep -qi 'DEVICES="tcp:/localhost:5015 /dev/pps0' /etc/default/gpsd || sed -i '/^DEVICES=.*/a #DEVICES="tcp:\/\/localhost:5015 \/dev\/pps0"' /etc/default/gpsd
+      sed -i 's#^\#DEVICES="tcp://localhost:5015 /dev/pps0"#\#DEVICES="tcp://127.0.0.1:5015 /dev/pps0"#' /etc/default/gpsd
+      grep -q '^#DEVICES=.*/dev/pps0' /etc/default/gpsd || sed -i '/^DEVICES=.*/a #DEVICES="tcp:\/\/127.0.0.1:5015 \/dev\/pps0"' /etc/default/gpsd
       #gpsd should always run, in read only mode
       sed -i 's/^GPSD_OPTIONS=.*/GPSD_OPTIONS="-n -b"/' /etc/default/gpsd
       #Overriding gpsd.service with custom dependency
@@ -223,6 +226,16 @@ install_gpsd_chrony() {
       grep -qi '^RestartSec=' /etc/systemd/system/gpsd.service || sed -i '/^Restart=always.*/a RestartSec=30' /etc/systemd/system/gpsd.service
       #Add ExecStartPre condition to not start gpsd if str2str_tcp is not running. See https://github.com/systemd/systemd/issues/1312
       grep -qi '^ExecStartPre=' /etc/systemd/system/gpsd.service || sed -i '/^ExecStart=.*/i ExecStartPre=systemctl is-active str2str_tcp.service' /etc/systemd/system/gpsd.service
+      #Restart gpsd with str2str_tcp (which restarts on a GNSS USB replug and
+      #starts gpsd again, see str2str_tcp.service), and wait for its port.
+      mkdir -p /etc/systemd/system/gpsd.service.d
+      cat > /etc/systemd/system/gpsd.service.d/rtkbase.conf <<'EOF'
+[Unit]
+PartOf=str2str_tcp.service
+
+[Service]
+ExecStartPre=/bin/bash -c 'for i in {1..30}; do (exec 3<>/dev/tcp/127.0.0.1/5015) 2>/dev/null && exit 0; sleep 1; done; exit 1'
+EOF
 
       #Reload systemd services and enable chrony and gpsd
       systemctl daemon-reload
